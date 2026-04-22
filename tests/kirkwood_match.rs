@@ -10,12 +10,13 @@ mod common;
 
 use common::{A, EPS_IN, EPS_OUT, eval_point, source};
 use selfie::analytical::kirkwood::reaction_field_potential_unit_source;
-use selfie::{BemSolution, Dielectric, Surface};
+use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 
 fn bem_phi_rf(subdivisions: usize) -> f64 {
     let surface = Surface::icosphere(A, subdivisions);
     let media = Dielectric::continuum(EPS_IN, EPS_OUT);
-    let sol = BemSolution::solve(&surface, media, &[source()], &[1.0]).unwrap();
+    let sol =
+        BemSolution::solve(&surface, media, ChargeSide::Exterior, &[source()], &[1.0]).unwrap();
     sol.reaction_field_at(eval_point())
 }
 

@@ -1,23 +1,26 @@
 //! Build the Juffer derivative-BIE block system.
 //!
 //! ```text
-//! [ ½I + K₀'     −(ε_out/ε_in) K₀ ] [ f ]   [     0        ]
-//! [ ½I − K_κ'            K_κ      ] [ h ] = [ φ_yukawa     ]
+//! [ ½I + K₀'     −(ε_out/ε_in) K₀ ] [ f ]   [ φ_coul_in  ]
+//! [ ½I − K_κ'            K_κ      ] [ h ] = [ φ_yukawa   ]
 //! ```
 //!
-//! - Top row comes from Green's 3rd identity applied to the Laplacian
-//!   interior (κ-independent; always G_0).
-//! - Bottom row uses the exterior Green's function G_κ and the
-//!   corresponding screened Coulomb source
-//!   `φ_yukawa(c_a) = Σ_i q_i · exp(−κ|c_a − r_i|) / (ε_out · |c_a − r_i|)`.
-//!   For `κ = 0` this reduces to the original Laplace BIE.
+//! Only one of the two RHS blocks is nonzero, determined by
+//! [`crate::units::ChargeSide`]:
+//! - **Interior sources** (protein-internal ionizables): top RHS carries
+//!   the Laplace Coulomb `φ_coul_in(c_a) = Σ q_i / (ε_in · |c_a − r_i|)`;
+//!   bottom RHS is zero.
+//! - **Exterior sources** (validation convention): bottom RHS carries the
+//!   screened Coulomb `φ_yukawa(c_a) = Σ q_i · exp(−κ|c_a − r_i|) /
+//!   (ε_out · |c_a − r_i|)`; top RHS is zero.
 //!
-//! Reference: Juffer et al., *J. Comput. Phys.* 97 (1991) 144–171,
-//! https://doi.org/10.1016/0021-9991(91)90043-K.
+//! Top row uses G_0 (Laplace interior — κ-independent); bottom row uses
+//! G_κ (screened PB exterior). Reference: Juffer et al., *J. Comput.
+//! Phys.* 97 (1991) 144–171, https://doi.org/10.1016/0021-9991(91)90043-K.
 
 use crate::geometry::Surface;
 use crate::solver::panel_integrals;
-use crate::units::Dielectric;
+use crate::units::{ChargeSide, Dielectric};
 use faer::Mat;
 use glam::DVec3;
 use rayon::prelude::*;
@@ -25,6 +28,7 @@ use rayon::prelude::*;
 pub(crate) fn build_block_system(
     surface: &Surface,
     media: Dielectric,
+    side: ChargeSide,
     charge_positions: &[[f64; 3]],
     charge_values: &[f64],
 ) -> (Mat<f64>, Vec<f64>) {
@@ -83,16 +87,22 @@ pub(crate) fn build_block_system(
     // Flat row-major → faer column-major.
     let mat = Mat::<f64>::from_fn(size, size, |i, j| flat[i * size + j]);
 
-    // RHS: [0; φ_yukawa]. Tiny loop, not worth parallelising.
+    // RHS: whichever block matches the charge side.
     let mut rhs = vec![0.0_f64; size];
-    for (a, out) in rhs.iter_mut().skip(n).enumerate() {
+    let (rhs_offset, rhs_eps, rhs_kappa) = match side {
+        // Interior sources: top block (indices 0..n), Laplace Coulomb
+        // with interior dielectric, no salt (interior is never screened).
+        ChargeSide::Interior => (0, media.eps_in, 0.0),
+        // Exterior sources: bottom block (indices n..2n), screened
+        // Coulomb with exterior dielectric and user-specified κ.
+        ChargeSide::Exterior => (n, media.eps_out, kappa),
+    };
+    for (a, out) in rhs.iter_mut().skip(rhs_offset).take(n).enumerate() {
         let ca = geom.centroids[a];
         let mut phi = 0.0;
         for (pos, &q) in charge_positions.iter().zip(charge_values.iter()) {
             let dist = (ca - DVec3::from(*pos)).length();
-            // why: screened-Coulomb (Yukawa) source in reduced units —
-            // prefactor 1/ε_out, no 4π or k_e. κ = 0 ⇒ plain Coulomb.
-            phi += q * (-kappa * dist).exp() / (media.eps_out * dist);
+            phi += q * (-rhs_kappa * dist).exp() / (rhs_eps * dist);
         }
         *out = phi;
     }

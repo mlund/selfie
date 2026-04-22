@@ -24,6 +24,20 @@ pub struct Dielectric {
     pub kappa: f64,
 }
 
+/// Which side of the dielectric boundary the point charges live on.
+///
+/// `Interior` is the production case for MC pKa titration — charges
+/// embedded in the low-ε protein interior Ω⁻. `Exterior` is the
+/// validation-friendly case where charges sit in the high-ε solvent Ω⁺
+/// (and the solver faces the salt/Yukawa regime directly). Placing the
+/// Coulomb source term on the correct side of the Juffer block system
+/// follows from this choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeSide {
+    Interior,
+    Exterior,
+}
+
 impl Dielectric {
     /// Pure dielectric (κ = 0).
     pub fn continuum(eps_in: f64, eps_out: f64) -> Self {

@@ -10,7 +10,7 @@ mod panel_integrals;
 
 use crate::error::{Error, Result};
 use crate::geometry::Surface;
-use crate::units::Dielectric;
+use crate::units::{ChargeSide, Dielectric};
 use glam::DVec3;
 use rayon::prelude::*;
 
@@ -22,6 +22,7 @@ use rayon::prelude::*;
 pub struct BemSolution<'s> {
     surface: &'s Surface,
     media: Dielectric,
+    side: ChargeSide,
     /// Surface potential at each face centroid (reduced units, e/Å).
     f: Vec<f64>,
     /// ∂φ_out/∂n at each face centroid (reduced units, e/Å²).
@@ -31,8 +32,14 @@ pub struct BemSolution<'s> {
 impl<'s> BemSolution<'s> {
     /// Solve the Juffer BIE for the given surface, dielectric, and charges.
     ///
-    /// `charge_positions` and `charge_values` must have the same length.
-    /// Positions are in Å; values are in elementary charge units `e`.
+    /// `side` selects whether point charges live inside (Ω⁻, the protein
+    /// interior — the production MC-titration case) or outside (Ω⁺, the
+    /// solvent — used for validation against the outside-charge Kirkwood
+    /// reference). Arrays must have matching lengths; positions in Å,
+    /// values in elementary charge units `e`.
+    ///
+    /// Note: interior is always Laplace (κ affects only the exterior
+    /// solvent). `media.kappa` is ignored by the interior-source RHS.
     ///
     /// # Errors
     /// Returns [`Error::ChargeLenMismatch`] if the input arrays have
@@ -41,6 +48,7 @@ impl<'s> BemSolution<'s> {
     pub fn solve(
         surface: &'s Surface,
         media: Dielectric,
+        side: ChargeSide,
         charge_positions: &[[f64; 3]],
         charge_values: &[f64],
     ) -> Result<Self> {
@@ -51,7 +59,7 @@ impl<'s> BemSolution<'s> {
             });
         }
         let (a_matrix, rhs) =
-            assembly::build_block_system(surface, media, charge_positions, charge_values);
+            assembly::build_block_system(surface, media, side, charge_positions, charge_values);
         let solution = linalg::solve_dense(a_matrix, rhs)?;
 
         let n = surface.num_faces();
@@ -61,6 +69,7 @@ impl<'s> BemSolution<'s> {
         Ok(Self {
             surface,
             media,
+            side,
             f: f.to_vec(),
             h: h.to_vec(),
         })
@@ -76,20 +85,26 @@ impl<'s> BemSolution<'s> {
         &self.h
     }
 
-    /// Reaction-field potential at a single external point (reduced units, e/Å).
+    /// Reaction-field potential at a probe point on the same side of the
+    /// boundary as the solve's charges (reduced units, e/Å).
     ///
-    /// Evaluates the exterior Green's-3rd-identity representation
-    ///   `φ_rf(r) = ∫_Γ [ f · ∂_{n,s}G_κ(r, s') − G_κ(r, s') · h ] dS'`
-    /// using a 3-point Gauss rule per panel. `κ = 0` recovers the plain
-    /// Coulomb Green's function. The Coulomb / Yukawa source contribution
-    /// is *not* included — this is φ − φ_source.
+    /// For interior solves the evaluator uses the Laplace Green's function
+    /// `G_0` and Ω⁻-outward normal:
+    ///   `φ_rf(r) = ∫_Γ [ (ε_out/ε_in)·G_0·h − f · ∂_{n,s}G_0 ] dS'`
+    /// For exterior solves it uses the Yukawa kernel and the Ω⁺-outward
+    /// normal sign:
+    ///   `φ_rf(r) = ∫_Γ [ f · ∂_{n,s}G_κ − G_κ · h ] dS'`
+    /// `κ = 0` recovers the plain Coulomb Green's function in the second
+    /// form. The Coulomb / Yukawa source contribution is *not* included —
+    /// this is φ − φ_source.
     pub fn reaction_field_at(&self, point: [f64; 3]) -> f64 {
         reaction_field_at_impl(
             self.surface,
             &self.f,
             &self.h,
             DVec3::from(point),
-            self.media.kappa,
+            self.side,
+            self.media,
         )
     }
 
@@ -152,15 +167,26 @@ impl<'s> BemSolution<'s> {
     }
 }
 
-fn reaction_field_at_impl(surface: &Surface, f: &[f64], h: &[f64], r: DVec3, kappa: f64) -> f64 {
-    // why: evaluator uses the same 3-point Gauss rule as the assembly
-    // off-diagonal so the two stages share convergence order. Sign follows
-    // Green's 3rd identity applied to Ω⁺ (outward normal −n):
-    //   φ_rf = ∫_Γ [f · ∂_{n,s}G_κ − G_κ · h] dS'.
-    // For κ = 0 the Yukawa factors (exp, κr+1) collapse to 1 and we get
-    // the plain Coulomb kernel back.
+fn reaction_field_at_impl(
+    surface: &Surface,
+    f: &[f64],
+    h: &[f64],
+    r: DVec3,
+    side: ChargeSide,
+    media: Dielectric,
+) -> f64 {
+    // why: the sign in Green's 3rd identity flips between interior and
+    // exterior because Ω⁺'s outward normal is −n while Ω⁻'s is +n. The
+    // interior formula also carries the ε_out/ε_in factor that links
+    // h = ∂φ_out/∂n to ∂φ_in/∂n through the dielectric BC. Interior is
+    // always Laplace (κ applies only to the exterior solvent), so
+    // interior evaluations use G_0 regardless of `media.kappa`.
     const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
     let geom = surface.geom_internal();
+    let (kappa_eval, f_sign, h_coeff) = match side {
+        ChargeSide::Interior => (0.0, -1.0, media.eps_out / media.eps_in),
+        ChargeSide::Exterior => (media.kappa, 1.0, -1.0),
+    };
     let mut sum = 0.0;
     for b in 0..geom.len() {
         let nb = geom.normals[b];
@@ -170,11 +196,11 @@ fn reaction_field_at_impl(surface: &Surface, f: &[f64], h: &[f64], r: DVec3, kap
             let d = r - p;
             let dist = d.length();
             let inv_r = 1.0 / dist;
-            let exp_kr = (-kappa * dist).exp();
-            let gk = exp_kr * inv_r / FOUR_PI;
-            let dgk_dn_source =
-                (kappa * dist + 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r / FOUR_PI;
-            quad += f[b] * dgk_dn_source - gk * h[b];
+            let exp_kr = (-kappa_eval * dist).exp();
+            let g = exp_kr * inv_r / FOUR_PI;
+            let dg_dn_source =
+                (kappa_eval * dist + 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r / FOUR_PI;
+            quad += f_sign * f[b] * dg_dn_source + h_coeff * g * h[b];
         }
         sum += quad * ab / 3.0;
     }

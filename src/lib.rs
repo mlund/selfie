@@ -23,4 +23,4 @@ pub mod analytical;
 pub use error::{Error, Result};
 pub use geometry::Surface;
 pub use solver::BemSolution;
-pub use units::Dielectric;
+pub use units::{ChargeSide, Dielectric};
