@@ -2,6 +2,11 @@
 //!
 //! Only compiled under `#[cfg(test)]` or the `validation` feature.
 
-pub mod bessel;
+// Numerical utilities only used by the Kirkwood analytical references —
+// not part of the product surface, so kept crate-private even under the
+// `validation` feature.
+pub(crate) mod bessel;
+mod legendre;
+
 pub mod kirkwood;
 pub mod kirkwood_salt;

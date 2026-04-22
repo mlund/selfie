@@ -1,8 +1,8 @@
 //! Boundary Element Method solver for the linearized Poisson–Boltzmann equation.
 //!
-//! See `bem_pb_plan.md` in the repo root for the math, sign conventions, and
-//! phase plan. The user-facing vocabulary is intentionally minimal:
-//! [`Surface`], [`Dielectric`], [`BemSolution`], and [`Error`].
+//! Juffer derivative-BIE formulation with centroid collocation and 3-point
+//! barycentric Gauss quadrature. User-facing vocabulary is intentionally
+//! minimal: [`Surface`], [`Dielectric`], [`BemSolution`], and [`Error`].
 
 mod error;
 mod geometry;

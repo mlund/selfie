@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 use crate::geometry::Surface;
 use crate::units::Dielectric;
 use glam::DVec3;
+use rayon::prelude::*;
 
 /// Solved surface densities for a given [`Surface`], [`Dielectric`] and
 /// charge configuration. Immutable after construction.
@@ -103,9 +104,13 @@ impl<'s> BemSolution<'s> {
                 got: out.len(),
             });
         }
-        for (p, o) in points.iter().zip(out.iter_mut()) {
-            *o = self.reaction_field_at(*p);
-        }
+        // why: each reaction_field_at call is O(n_panels) and independent;
+        // parallel evaluation scales ~linearly with cores for typical
+        // (many-points, large-mesh) use cases.
+        points
+            .par_iter()
+            .zip(out.par_iter_mut())
+            .for_each(|(p, o)| *o = self.reaction_field_at(*p));
         Ok(())
     }
 

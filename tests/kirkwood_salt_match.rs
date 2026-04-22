@@ -6,30 +6,18 @@
 
 #![cfg(feature = "validation")]
 
+mod common;
+
+use common::{A, EPS_IN, EPS_OUT, eval_point, source};
 use selfie::analytical::kirkwood_salt::reaction_field_potential_unit_source as phi_rf_analytical;
 use selfie::{BemSolution, Dielectric, Surface};
 
-const A: f64 = 10.0;
-const R: f64 = 13.0; // 3 Å from surface — physiologically realistic.
-const EPS_IN: f64 = 2.0;
-const EPS_OUT: f64 = 80.0;
 const KAPPA: f64 = 1.0 / 14.0;
-
-fn source() -> [f64; 3] {
-    [R, 0.0, 0.0]
-}
-
-fn eval_point() -> [f64; 3] {
-    // γ = 30°: chord |r_i − r_j| = 2 R sin(15°) ≈ 6.7 Å.
-    [R * (3f64.sqrt() / 2.0), R * 0.5, 0.0]
-}
 
 fn bem_phi_rf(subdivisions: usize, kappa: f64) -> f64 {
     let surface = Surface::icosphere(A, subdivisions);
     let media = Dielectric::continuum_with_salt(EPS_IN, EPS_OUT, kappa);
-    let positions = [source()];
-    let values = [1.0_f64];
-    let sol = BemSolution::solve(&surface, media, &positions, &values).unwrap();
+    let sol = BemSolution::solve(&surface, media, &[source()], &[1.0]).unwrap();
     sol.reaction_field_at(eval_point())
 }
 
@@ -58,11 +46,10 @@ fn convergence_to_kirkwood_salt_physiological() {
 
 #[test]
 fn screening_reduces_magnitude_vs_salt_free() {
-    // For a close pair (6.7 Å apart, 3 Å from the sphere surface) salt
+    // For a close pair (≈ 6.7 Å apart, 3 Å above the dielectric surface) salt
     // shields both the direct and reaction-field responses, so
-    // |φ_rf(κ > 0)| < |φ_rf(κ = 0)|. (At wide separations the reaction-
-    // field path geometry makes this inequality non-monotonic, so this
-    // test is specific to the salt-bridge regime we validate in.)
+    // |φ_rf(κ > 0)| < |φ_rf(κ = 0)|. At wide separations the inequality is
+    // non-monotonic, so this test is specific to the salt-bridge regime.
     let salted = bem_phi_rf(7, KAPPA);
     let salt_free = bem_phi_rf(7, 0.0);
     assert!(

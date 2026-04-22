@@ -1,12 +1,10 @@
 //! Kirkwood-style analytical reaction-field potential for a dielectric sphere
-//! in κ = 0 with **charges exterior to the sphere** (the case we actually
-//! validate against — see bem_pb_plan.md §0 "All point charges live in Ω⁺").
+//! in κ = 0 with **charges exterior to the sphere** (the case we validate
+//! against in Phase 1 — Ω⁺ charges, Ω⁻ dielectric cavity).
 //!
 //! Derived by matching a point charge's exterior multipole expansion to a
 //! regular interior expansion at r = a using φ continuous and
-//! ε·∂_r φ continuous. Reference: standard boundary-value problem as in
-//! Jackson §4.3 and Bottcher 1952; the specific closed form for
-//! outside-sphere charges is:
+//! ε·∂_r φ continuous (Jackson §4.3 boundary-value problem):
 //!
 //! ```text
 //! φ_rf(r_j; r_i) = (1/ε_out) · Σ_{n=0}^∞  [ n·(ε_out − ε_in) ]
@@ -15,18 +13,17 @@
 //!                                         · P_n(cos γ_ij)
 //! ```
 //!
-//! Note the `n` (not `n+1`) prefactor in the numerator and the sign,
-//! differing from bem_pb_plan.md §3 which appears to transcribe the
-//! *inside-charge* Kirkwood 1934 original; the exterior-charge case has
-//! B_0 = 0 (neutral sphere carries no induced monopole with an exterior
-//! source), which this formula respects.
+//! why: the `n` (not `n+1`) prefactor is specific to the **outside-charge**
+//! case. The inside-charge Kirkwood 1934 original has `n+1`, but its
+//! B_0 ≠ 0 contradicts charge conservation for a neutral sphere with an
+//! exterior source; the outside form has B_0 = 0 as it must.
 //!
-//! All in reduced units (charge in `e`, distance in Å, φ in e/Å).
-//!
-//! **Sign convention**: this is φ_total − φ_Coulomb_in_ε_out — i.e. the
-//! reaction-field *correction*, not the total potential. Multiplied by a
-//! target charge q_j gives the reaction-field contribution to W_ij in e²/Å.
+//! All in reduced units (charge in `e`, distance in Å, φ in e/Å). Sign
+//! convention: φ_total − φ_Coulomb_in_ε_out (the reaction-field correction,
+//! not the total potential). Multiplied by a target charge `q_j` it gives
+//! the reaction-field contribution to W_ij in e²/Å.
 
+use super::legendre::legendre_series;
 use glam::DVec3;
 
 /// Reaction-field potential at `r_eval` due to a unit point source at
@@ -52,35 +49,19 @@ pub fn reaction_field_potential_unit_source(
     let cos_gamma = rs.dot(re) / (r_i * r_j);
 
     // why: running products for a^(2n+1) and (r_i·r_j)^(n+1) replace O(log n)
-    // `powi` calls per iteration with O(1), and the two-term Legendre
-    // recurrence stays stable up to n ~ 10⁴. n_max ≈ 30 suffices for the
-    // plan's r/a = 1.2 geometry where terms decay like (a/r)^(2n).
+    // `powi` per iteration with O(1). n_max ≈ 30 suffices for plan geometries
+    // where terms decay like (a/r)^(2n).
+    let p = legendre_series(cos_gamma, n_max);
     let a2 = a * a;
     let rij = r_i * r_j;
     let mut a_pow = a;
     let mut rij_pow = rij;
 
-    let mut pn_minus_2 = 1.0_f64;
-    let mut pn_minus_1 = cos_gamma;
+    // B_n/q from BC matching (φ and ε·∂_r φ continuous) for a point charge
+    // *outside* a dielectric sphere. The 1/ε_out prefactor is factored out
+    // of the loop (applied at return).
     let mut sum = 0.0;
-    for n in 0..=n_max {
-        let p_n = match n {
-            0 => 1.0,
-            1 => cos_gamma,
-            _ => {
-                let nn = n as f64;
-                // (n) · P_n(x) = (2n−1) · x · P_{n−1}(x) − (n−1) · P_{n−2}(x)
-                let p = ((2.0 * nn - 1.0) * cos_gamma * pn_minus_1 - (nn - 1.0) * pn_minus_2) / nn;
-                pn_minus_2 = pn_minus_1;
-                pn_minus_1 = p;
-                p
-            }
-        };
-
-        // why: B_n/q from BC matching (φ and ε·∂_r φ continuous) for a
-        // point charge outside a dielectric sphere — the outside-charge
-        // case (not the inside-charge Kirkwood 1934 original). The 1/ε_out
-        // prefactor appears once, factored out of the loop below.
+    for (n, &p_n) in p.iter().enumerate() {
         let nf = n as f64;
         let coeff = nf * (eps_out - eps_in) / (nf * eps_in + (nf + 1.0) * eps_out);
         sum += coeff * (a_pow / rij_pow) * p_n;

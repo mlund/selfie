@@ -26,29 +26,31 @@ use glam::DVec3;
 
 const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
 
-/// Off-diagonal K_κ via 3-point symmetric Gauss (barycentrics
-/// `(2/3, 1/6, 1/6)` + cyclic permutations, each weight 1/3).
-/// Pass `kappa = 0.0` for the Laplace kernel G_0.
-pub(crate) fn k_off(observer: DVec3, tri: [DVec3; 3], ab: f64, kappa: f64) -> f64 {
-    let mut acc = 0.0;
-    for p in gauss3_points(tri) {
-        let r = (observer - p).length();
-        acc += (-kappa * r).exp() / r;
-    }
-    acc * ab / (3.0 * FOUR_PI)
-}
-
-/// Off-diagonal K_κ' via 3-point Gauss. Integrand
-/// `(κr + 1) · exp(−κr) · (c_a − s')·n_b / (4π r³)` with r = |c_a − s'|.
-pub(crate) fn k_prime_off(observer: DVec3, tri: [DVec3; 3], nb: DVec3, ab: f64, kappa: f64) -> f64 {
-    let mut acc = 0.0;
+/// Off-diagonal K_κ and K_κ' at once via 3-point symmetric Gauss
+/// (barycentrics `(2/3, 1/6, 1/6)` + cyclic permutations, each weight 1/3).
+/// Pass `kappa = 0.0` for the Laplace kernel G_0; at κ = 0 the `exp_kr`
+/// and `κr + 1` factors collapse to 1.
+///
+/// Fused so the 3 quadrature points, `d = observer − p`, `r = |d|`,
+/// `d·n_b` and `exp(−κr)` are computed once per point instead of twice.
+pub(crate) fn k_and_kprime_off(
+    observer: DVec3,
+    tri: [DVec3; 3],
+    nb: DVec3,
+    ab: f64,
+    kappa: f64,
+) -> (f64, f64) {
+    let mut acc_k = 0.0;
+    let mut acc_kp = 0.0;
     for p in gauss3_points(tri) {
         let d = observer - p;
         let r = d.length();
         let exp_kr = (-kappa * r).exp();
-        acc += (kappa * r + 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+        acc_k += exp_kr / r;
+        acc_kp += (kappa * r + 1.0) * exp_kr * d.dot(nb) / (r * r * r);
     }
-    acc * ab / (3.0 * FOUR_PI)
+    let s = ab / (3.0 * FOUR_PI);
+    (acc_k * s, acc_kp * s)
 }
 
 /// Barycentric 3-point rule suited for smooth integrands on a triangle.
@@ -259,7 +261,7 @@ mod tests {
         let area = 0.5 * (v[1] - v[0]).cross(v[2] - v[0]).length();
         let observer = DVec3::new(5.0, 5.0, 10.0);
 
-        let three_point = k_off(observer, v, area, 0.0);
+        let (three_point, _) = k_and_kprime_off(observer, v, DVec3::Z, area, 0.0);
         let refined = refine_integrate_g0_off(v, observer, 50);
         let rel_err = (three_point - refined).abs() / refined.abs();
         // why: 3-point Gauss is exact for degree-2 polynomial integrands,

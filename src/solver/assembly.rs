@@ -67,12 +67,9 @@ pub(crate) fn build_block_system(
                         0.0,
                     )
                 } else {
-                    (
-                        panel_integrals::k_off(ca, tri, ab, 0.0),
-                        panel_integrals::k_prime_off(ca, tri, nb, ab, 0.0),
-                        panel_integrals::k_off(ca, tri, ab, kappa),
-                        panel_integrals::k_prime_off(ca, tri, nb, ab, kappa),
-                    )
+                    let (k0, k0p) = panel_integrals::k_and_kprime_off(ca, tri, nb, ab, 0.0);
+                    let (kk, kkp) = panel_integrals::k_and_kprime_off(ca, tri, nb, ab, kappa);
+                    (k0, k0p, kk, kkp)
                 };
 
                 let half_i = if a == b { 0.5 } else { 0.0 };

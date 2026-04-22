@@ -20,6 +20,7 @@
 //! decay of `k_n(κr)` dominates and `|φ_rf| → 0`.
 
 use super::bessel::{i_deriv, i_series, k_deriv, k_series};
+use super::legendre::legendre_series;
 use glam::DVec3;
 
 /// Reaction-field potential at `r_eval` due to a unit point source at
@@ -52,35 +53,18 @@ pub fn reaction_field_potential_unit_source(
     let k_ri = k_series(kappa * r_i, n_max);
     let k_rj = k_series(kappa * r_j, n_max);
 
-    let mut pn_minus_2 = 1.0_f64;
-    let mut pn_minus_1 = cos_gamma;
+    let p = legendre_series(cos_gamma, n_max);
     let mut sum = 0.0;
     for n in 0..=n_max {
-        let p_n = match n {
-            0 => 1.0,
-            1 => cos_gamma,
-            _ => {
-                let nn = n as f64;
-                let p = ((2.0 * nn - 1.0) * cos_gamma * pn_minus_1 - (nn - 1.0) * pn_minus_2) / nn;
-                pn_minus_2 = pn_minus_1;
-                pn_minus_1 = p;
-                p
-            }
-        };
-
         let nf = n as f64;
-        let i_n = i_x[n];
-        let k_n_x = k_x[n];
-        let ip = i_deriv(n, x, &i_x);
-        let kp = k_deriv(n, x, &k_x);
-        // why: B_n/q from BC matching at r = a (φ continuous,
-        // ε·∂_r φ continuous), with the interior Laplace solution
-        // D_n r^n P_n and exterior Yukawa response B_n k_n(κr) P_n.
-        let numerator = eps_in * nf * i_n - eps_out * x * ip;
-        let denominator = eps_out * x * kp - eps_in * nf * k_n_x;
+        // B_n/q from BC matching at r = a (φ continuous, ε·∂_r φ continuous)
+        // with interior Laplace solution D_n r^n P_n and exterior Yukawa
+        // response B_n k_n(κr) P_n.
+        let numerator = eps_in * nf * i_x[n] - eps_out * x * i_deriv(n, x, &i_x);
+        let denominator = eps_out * x * k_deriv(n, x, &k_x) - eps_in * nf * k_x[n];
         let coeff = numerator / denominator;
 
-        let term = (2.0 * nf + 1.0) * k_ri[n] * k_rj[n] * coeff * p_n;
+        let term = (2.0 * nf + 1.0) * k_ri[n] * k_rj[n] * coeff * p[n];
 
         // why: at small κa the individual k_n(κa), k_n(κr_i), k_n(κr_j)
         // explode for high n even though their ratio (which is what
