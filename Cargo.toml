@@ -1,0 +1,16 @@
+[package]
+name = "selfie"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+# Compile the Kirkwood analytical reference (otherwise gated to #[cfg(test)]).
+# Intended for benchmarks/examples that need the reference at runtime.
+validation = []
+
+[dependencies]
+faer = "0.22"
+glam = "0.30"
+hexasphere = "18.0"
+thiserror = "2"

@@ -1,0 +1,212 @@
+//! Triangulated dielectric boundary Γ.
+//!
+//! The only public type is [`Surface`]. All panel geometry, mesh construction
+//! details, and the `hexasphere` adapter are hidden behind it.
+
+mod icosphere;
+mod panel;
+
+use crate::error::{Error, Result};
+use glam::DVec3;
+use panel::FaceGeoms;
+
+/// A closed, outward-oriented triangulated boundary.
+///
+/// Invariants maintained after construction:
+/// - Every face index is `< vertices.len()`.
+/// - No face is degenerate (area > 0).
+/// - Face normals point into Ω⁺ (outward). The constructors enforce this for
+///   meshes enclosing the origin; [`Self::from_mesh`] returns
+///   [`Error::NormalOrientation`] on failure.
+pub struct Surface {
+    // why: glam's DVec3 is #[repr(C)] = three packed f64 (verified at
+    // construction time by the const-asserts below), so `&[DVec3]` and
+    // `&[[f64; 3]]` are layout-compatible. We use DVec3 internally for the
+    // ergonomic `.dot`/`.cross`/`.normalize` math and expose the same bytes as
+    // `&[[f64; 3]]` on the public API — zero-copy, numpy-compatible.
+    vertices: Vec<DVec3>,
+    faces: Vec<[u32; 3]>,
+    geom: FaceGeoms,
+}
+
+// why: compile-time proof that the DVec3 → [f64; 3] reinterpret below is
+// sound. If a future glam version changes this, the crate fails to compile
+// rather than silently returning garbage at runtime.
+const _: () = {
+    assert!(core::mem::size_of::<DVec3>() == core::mem::size_of::<[f64; 3]>());
+    assert!(core::mem::align_of::<DVec3>() <= core::mem::align_of::<[f64; 3]>());
+};
+
+impl Surface {
+    /// Build an icosphere of radius `radius` using `hexasphere`'s subdivision.
+    ///
+    /// `subdivisions` is the number of **extra points per edge**
+    /// (hexasphere convention — *not* a recursive-doubling level).
+    /// Triangle count is `20 · (subdivisions + 1)²`; so `subdivisions = 7`
+    /// gives 1280 triangles.
+    pub fn icosphere(radius: f64, subdivisions: usize) -> Self {
+        let (vertices, faces) = icosphere::build(radius, subdivisions);
+        let geom = FaceGeoms::compute(&vertices, &faces);
+        debug_assert!(
+            geom.centroids
+                .iter()
+                .zip(geom.normals.iter())
+                .all(|(c, n)| c.dot(*n) > 0.0),
+            "icosphere produced inward-facing normal — hexasphere convention broke"
+        );
+        Self {
+            vertices,
+            faces,
+            geom,
+        }
+    }
+
+    /// Build a surface from caller-supplied vertex and face arrays.
+    ///
+    /// `vertices` layout: `&[[x, y, z], ...]`. `faces` layout: `&[[i, j, k], ...]`.
+    /// Faces must be CCW as seen from Ω⁺ (outward). For protein surfaces this
+    /// is the standard convention emitted by MSMS/NanoShaper.
+    pub fn from_mesh(vertices: &[[f64; 3]], faces: &[[u32; 3]]) -> Result<Self> {
+        let verts: Vec<DVec3> = vertices.iter().copied().map(DVec3::from).collect();
+        let faces_vec: Vec<[u32; 3]> = faces.to_vec();
+
+        for (face_idx, &[a, b, c]) in faces_vec.iter().enumerate() {
+            for &idx in &[a, b, c] {
+                if (idx as usize) >= verts.len() {
+                    return Err(Error::MeshFaceOutOfRange {
+                        face: face_idx,
+                        index: idx,
+                        vertex_count: verts.len(),
+                    });
+                }
+            }
+        }
+
+        let geom = FaceGeoms::compute(&verts, &faces_vec);
+        for (i, ((&area, &c), &n)) in geom
+            .areas
+            .iter()
+            .zip(&geom.centroids)
+            .zip(&geom.normals)
+            .enumerate()
+        {
+            if area <= 0.0 || !area.is_finite() {
+                return Err(Error::DegenerateFace { face: i, area });
+            }
+            // why: orientation check is meaningful only for surfaces enclosing
+            // the origin; skip it for centroids very close to origin (the
+            // sanity check is weak there) and trust the user otherwise.
+            let dot = c.dot(n);
+            if dot <= 0.0 && c.length_squared() > 1e-12 {
+                return Err(Error::NormalOrientation { face: i, dot });
+            }
+        }
+
+        Ok(Self {
+            vertices: verts,
+            faces: faces_vec,
+            geom,
+        })
+    }
+
+    pub fn num_vertices(&self) -> usize {
+        self.vertices.len()
+    }
+
+    pub fn num_faces(&self) -> usize {
+        self.geom.len()
+    }
+
+    /// Vertex positions as a contiguous `(N, 3)` f64 slice.
+    pub fn vertices(&self) -> &[[f64; 3]] {
+        reinterpret_dvec3_slice(&self.vertices)
+    }
+
+    /// Face vertex indices as `(N, 3)` u32.
+    pub fn faces(&self) -> &[[u32; 3]] {
+        &self.faces
+    }
+
+    /// Centroid of each face as `(N, 3)` f64.
+    pub fn face_centroids(&self) -> &[[f64; 3]] {
+        reinterpret_dvec3_slice(&self.geom.centroids)
+    }
+
+    /// Outward unit normal of each face as `(N, 3)` f64.
+    pub fn face_normals(&self) -> &[[f64; 3]] {
+        reinterpret_dvec3_slice(&self.geom.normals)
+    }
+
+    /// Area of each face, length `num_faces`.
+    pub fn face_areas(&self) -> &[f64] {
+        &self.geom.areas
+    }
+
+    pub(crate) fn geom_internal(&self) -> &FaceGeoms {
+        &self.geom
+    }
+}
+
+/// Safe reinterpretation of `&[DVec3]` as `&[[f64; 3]]` based on the const
+/// layout asserts above.
+fn reinterpret_dvec3_slice(v: &[DVec3]) -> &[[f64; 3]] {
+    // SAFETY: the const asserts at module scope prove size + alignment
+    // compatibility; DVec3 is #[repr(C)] in glam, so field order xyz matches
+    // [f64; 3]. Length is preserved; no aliasing issue (shared borrow).
+    unsafe { core::slice::from_raw_parts(v.as_ptr().cast::<[f64; 3]>(), v.len()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::f64::consts::PI;
+
+    #[test]
+    fn icosphere_total_area_matches_sphere() {
+        // Plan acceptance: subdiv=7 icosphere total area ≈ 4πa² within 0.5%.
+        let radius = 10.0;
+        let surf = Surface::icosphere(radius, 7);
+        let total: f64 = surf.face_areas().iter().sum();
+        let expected = 4.0 * PI * radius * radius;
+        let rel_err = (total - expected).abs() / expected;
+        assert!(rel_err < 0.005, "rel. area error {:e} >= 0.5%", rel_err);
+    }
+
+    #[test]
+    fn icosphere_face_counts_match_formula() {
+        for s in [0usize, 1, 3, 7] {
+            let surf = Surface::icosphere(1.0, s);
+            assert_eq!(surf.num_faces(), 20 * (s + 1).pow(2));
+        }
+    }
+
+    #[test]
+    fn icosphere_vertices_lie_on_sphere() {
+        let r = 5.0;
+        let surf = Surface::icosphere(r, 3);
+        for v in surf.vertices() {
+            let len = DVec3::from(*v).length();
+            assert!(
+                (len - r).abs() < 1e-12,
+                "vertex off sphere: |v|={len} vs r={r}"
+            );
+        }
+    }
+
+    #[test]
+    fn icosphere_normals_point_outward() {
+        let surf = Surface::icosphere(10.0, 3);
+        for (c, n) in surf.face_centroids().iter().zip(surf.face_normals()) {
+            let dot = c[0] * n[0] + c[1] * n[1] + c[2] * n[2];
+            assert!(dot > 0.0, "inward normal: c·n = {}", dot);
+        }
+    }
+
+    #[test]
+    fn from_mesh_rejects_out_of_range_index() {
+        let verts = [[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let faces = [[0u32, 1, 5]];
+        let r = Surface::from_mesh(&verts, &faces);
+        assert!(matches!(r, Err(Error::MeshFaceOutOfRange { .. })));
+    }
+}
