@@ -169,7 +169,7 @@ impl<'s> BemSolution<'s> {
     }
 
     /// Dielectric used for the solve (passthrough for convenience).
-    pub fn dielectric(&self) -> Dielectric {
+    pub const fn dielectric(&self) -> Dielectric {
         self.media
     }
 }
@@ -210,8 +210,9 @@ fn reaction_field_at_impl(
             let exp_kr = (-kappa_eval * dist).exp();
             let g = exp_kr * inv_r / FOUR_PI;
             let dg_dn_source =
-                (kappa_eval * dist + 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r / FOUR_PI;
-            quad += f_sign * f_b * dg_dn_source + h_coeff * g * h_b;
+                kappa_eval.mul_add(dist, 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r
+                    / FOUR_PI;
+            quad += (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
         }
         sum += quad * ab / 3.0;
     }

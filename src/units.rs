@@ -41,13 +41,13 @@ pub enum ChargeSide {
 impl Dielectric {
     /// Pure dielectric (κ = 0). Shorthand for `continuum_with_salt(..., 0.0)`.
     #[must_use]
-    pub fn continuum(eps_in: f64, eps_out: f64) -> Self {
+    pub const fn continuum(eps_in: f64, eps_out: f64) -> Self {
         Self::continuum_with_salt(eps_in, eps_out, 0.0)
     }
 
     /// Dielectric with salt (nonzero inverse Debye length).
     #[must_use]
-    pub fn continuum_with_salt(eps_in: f64, eps_out: f64, kappa: f64) -> Self {
+    pub const fn continuum_with_salt(eps_in: f64, eps_out: f64, kappa: f64) -> Self {
         Self {
             eps_in,
             eps_out,
@@ -57,12 +57,12 @@ impl Dielectric {
 }
 
 /// Convert a reduced-units energy (e²/Å) to kcal/mol.
-pub fn to_kcal_per_mol(energy_reduced: f64) -> f64 {
+pub const fn to_kcal_per_mol(energy_reduced: f64) -> f64 {
     energy_reduced * KE_KCAL_PER_MOL
 }
 
 /// Convert a reduced-units energy (e²/Å) to dimensionless `kT` at `temperature_k`.
-pub fn to_kt(energy_reduced: f64, temperature_k: f64) -> f64 {
+pub const fn to_kt(energy_reduced: f64, temperature_k: f64) -> f64 {
     to_kcal_per_mol(energy_reduced) / (R_KCAL_PER_MOL_PER_K * temperature_k)
 }
 

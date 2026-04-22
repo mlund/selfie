@@ -10,7 +10,7 @@
 use glam::DVec3;
 use hexasphere::shapes::IcoSphere;
 
-pub(crate) fn build(radius: f64, subdivisions: usize) -> (Vec<DVec3>, Vec<[u32; 3]>) {
+pub fn build(radius: f64, subdivisions: usize) -> (Vec<DVec3>, Vec<[u32; 3]>) {
     let sphere = IcoSphere::new(subdivisions, |_| ());
 
     let vertices: Vec<DVec3> = sphere

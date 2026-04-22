@@ -13,7 +13,7 @@ use faer::linalg::solvers::Solve;
 /// Uses partial-pivot LU. Phase 1 meshes (≤ 1280 triangles → A is 2560×2560)
 /// factor in under a second; see plan doc for the upper mesh size this
 /// scales to. Beyond that, switch to matrix-free GMRES (Phase 8).
-pub(crate) fn solve_dense(a: Mat<f64>, b: Vec<f64>) -> Result<Vec<f64>> {
+pub fn solve_dense(a: Mat<f64>, b: Vec<f64>) -> Result<Vec<f64>> {
     let n = a.nrows();
     debug_assert_eq!(a.nrows(), a.ncols());
     debug_assert_eq!(b.len(), n);

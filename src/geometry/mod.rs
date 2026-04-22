@@ -111,11 +111,11 @@ impl Surface {
         })
     }
 
-    pub fn num_vertices(&self) -> usize {
+    pub const fn num_vertices(&self) -> usize {
         self.vertices.len()
     }
 
-    pub fn num_faces(&self) -> usize {
+    pub const fn num_faces(&self) -> usize {
         self.geom.len()
     }
 
@@ -144,14 +144,14 @@ impl Surface {
         &self.geom.areas
     }
 
-    pub(crate) fn geom_internal(&self) -> &FaceGeoms {
+    pub(crate) const fn geom_internal(&self) -> &FaceGeoms {
         &self.geom
     }
 }
 
 /// Safe reinterpretation of `&[DVec3]` as `&[[f64; 3]]` based on the const
 /// layout asserts above.
-fn reinterpret_dvec3_slice(v: &[DVec3]) -> &[[f64; 3]] {
+const fn reinterpret_dvec3_slice(v: &[DVec3]) -> &[[f64; 3]] {
     // SAFETY: the const asserts at module scope prove size + alignment
     // compatibility; DVec3 is #[repr(C)] in glam, so field order xyz matches
     // [f64; 3]. Length is preserved; no aliasing issue (shared borrow).

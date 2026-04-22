@@ -7,7 +7,7 @@
 use glam::DVec3;
 
 #[derive(Debug)]
-pub(crate) struct FaceGeoms {
+pub struct FaceGeoms {
     pub centroids: Vec<DVec3>,
     pub normals: Vec<DVec3>,
     pub areas: Vec<f64>,
@@ -49,12 +49,12 @@ impl FaceGeoms {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.areas.len()
     }
 
     #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.areas.is_empty()
     }
 }

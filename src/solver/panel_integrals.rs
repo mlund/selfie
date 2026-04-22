@@ -33,7 +33,7 @@ const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
 ///
 /// Fused so the 3 quadrature points, `d = observer − p`, `r = |d|`,
 /// `d·n_b` and `exp(−κr)` are computed once per point instead of twice.
-pub(crate) fn k_and_kprime_off(
+pub fn k_and_kprime_off(
     observer: DVec3,
     tri: [DVec3; 3],
     nb: DVec3,
@@ -47,7 +47,7 @@ pub(crate) fn k_and_kprime_off(
         let r = d.length();
         let exp_kr = (-kappa * r).exp();
         acc_k += exp_kr / r;
-        acc_kp += (kappa * r + 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+        acc_kp += kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
     }
     let s = ab / (3.0 * FOUR_PI);
     (acc_k * s, acc_kp * s)
@@ -55,7 +55,7 @@ pub(crate) fn k_and_kprime_off(
 
 /// Barycentric 3-point rule suited for smooth integrands on a triangle.
 /// Degree-of-exactness 2.
-pub(crate) fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {
+pub fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {
     // Barycentrics (2/3, 1/6, 1/6) + cyclic permutations.
     const A: f64 = 2.0 / 3.0;
     const B: f64 = 1.0 / 6.0;
@@ -71,7 +71,7 @@ pub(crate) fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {
 /// Splits G_κ = G_0 + (G_κ − G_0). The singular part is Wilton–Rao–Glisson;
 /// the bounded correction `(exp(−κr) − 1) / (4π r)` — finite with limit
 /// −κ/(4π) as r → 0 — is integrated with 3-point Gauss.
-pub(crate) fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
+pub fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
     let k0 = wrg_g0_self(tri, centroid);
     if kappa == 0.0 {
         return k0;
@@ -85,7 +85,7 @@ pub(crate) fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
         // for the (2/3, 1/6, 1/6) rule — centroid has barycentric (1/3)³ —
         // but f64 cancellation could still produce tiny r).
         corr += if r > 1e-14 {
-            ((-kappa * r).exp() - 1.0) / r
+            (-kappa * r).exp_m1() / r
         } else {
             -kappa
         };

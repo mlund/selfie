@@ -27,14 +27,14 @@
 /// Reaction-field potential at the sphere centre per unit source charge
 /// (reduced units e/Å). Valid for any `κ ≥ 0`. The source is placed at
 /// the origin; the field point is also the origin.
-pub fn reaction_field_at_center(a: f64, eps_in: f64, eps_out: f64, kappa: f64) -> f64 {
+pub const fn reaction_field_at_center(a: f64, eps_in: f64, eps_out: f64, kappa: f64) -> f64 {
     (1.0 / (eps_out * (1.0 + kappa * a)) - 1.0 / eps_in) / a
 }
 
 /// Born self-energy of a point charge `q` at the sphere centre
 /// (reduced units e²/Å). For like values of `ε_in < ε_out` this is
 /// negative (solvation stabilises the interior charge).
-pub fn born_self_energy(q: f64, a: f64, eps_in: f64, eps_out: f64, kappa: f64) -> f64 {
+pub const fn born_self_energy(q: f64, a: f64, eps_in: f64, eps_out: f64, kappa: f64) -> f64 {
     0.5 * q * q * reaction_field_at_center(a, eps_in, eps_out, kappa)
 }
 

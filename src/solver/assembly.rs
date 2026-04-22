@@ -25,7 +25,7 @@ use faer::Mat;
 use glam::DVec3;
 use rayon::prelude::*;
 
-pub(crate) fn build_block_system(
+pub fn build_block_system(
     surface: &Surface,
     media: Dielectric,
     side: ChargeSide,
