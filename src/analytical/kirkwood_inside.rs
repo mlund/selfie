@@ -30,7 +30,9 @@ use glam::DVec3;
 
 /// Reaction-field potential at `r_eval` due to a unit point source at
 /// `r_source`, both interior to a sphere of radius `a` centered at origin,
-/// summed to `n_max` multipole terms.
+/// summed to `n_max` multipole terms. For source **or** field point at
+/// the origin use [`super::born::reaction_field_at_center`] — this
+/// function would divide by zero forming `cos γ_ij`.
 pub fn reaction_field_potential_unit_source(
     r_source: [f64; 3],
     r_eval: [f64; 3],
@@ -43,6 +45,10 @@ pub fn reaction_field_potential_unit_source(
     let re = DVec3::from(r_eval);
     let r_i = rs.length();
     let r_j = re.length();
+    debug_assert!(
+        r_i > 0.0 && r_j > 0.0,
+        "Kirkwood-inside degenerate at origin; use born::reaction_field_at_center"
+    );
     debug_assert!(
         r_i < a && r_j < a,
         "Kirkwood-inside requires both points strictly inside the sphere"

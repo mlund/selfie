@@ -6,6 +6,7 @@
 
 use glam::DVec3;
 
+#[derive(Debug)]
 pub(crate) struct FaceGeoms {
     pub centroids: Vec<DVec3>,
     pub normals: Vec<DVec3>,

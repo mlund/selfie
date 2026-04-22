@@ -18,6 +18,7 @@ use panel::FaceGeoms;
 /// - Face normals point into Ω⁺ (outward). The constructors enforce this for
 ///   meshes enclosing the origin; [`Self::from_mesh`] returns
 ///   [`Error::NormalOrientation`] on failure.
+#[derive(Debug)]
 pub struct Surface {
     // why: glam's DVec3 is #[repr(C)] = three packed f64 (verified at
     // construction time by the const-asserts below), so `&[DVec3]` and
@@ -44,6 +45,7 @@ impl Surface {
     /// (hexasphere convention — *not* a recursive-doubling level).
     /// Triangle count is `20 · (subdivisions + 1)²`; so `subdivisions = 7`
     /// gives 1280 triangles.
+    #[must_use]
     pub fn icosphere(radius: f64, subdivisions: usize) -> Self {
         let (vertices, faces) = icosphere::build(radius, subdivisions);
         let geom = FaceGeoms::compute(&vertices, &faces);
@@ -68,10 +70,10 @@ impl Surface {
     /// is the standard convention emitted by MSMS/NanoShaper.
     pub fn from_mesh(vertices: &[[f64; 3]], faces: &[[u32; 3]]) -> Result<Self> {
         let verts: Vec<DVec3> = vertices.iter().copied().map(DVec3::from).collect();
-        let faces_vec: Vec<[u32; 3]> = faces.to_vec();
+        let faces: Vec<[u32; 3]> = faces.to_vec();
 
-        for (face_idx, &[a, b, c]) in faces_vec.iter().enumerate() {
-            for &idx in &[a, b, c] {
+        for (face_idx, &[a, b, c]) in faces.iter().enumerate() {
+            for idx in [a, b, c] {
                 if (idx as usize) >= verts.len() {
                     return Err(Error::MeshFaceOutOfRange {
                         face: face_idx,
@@ -82,7 +84,7 @@ impl Surface {
             }
         }
 
-        let geom = FaceGeoms::compute(&verts, &faces_vec);
+        let geom = FaceGeoms::compute(&verts, &faces);
         for (i, ((&area, &c), &n)) in geom
             .areas
             .iter()
@@ -104,7 +106,7 @@ impl Surface {
 
         Ok(Self {
             vertices: verts,
-            faces: faces_vec,
+            faces,
             geom,
         })
     }

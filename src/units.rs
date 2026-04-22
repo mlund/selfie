@@ -39,16 +39,14 @@ pub enum ChargeSide {
 }
 
 impl Dielectric {
-    /// Pure dielectric (κ = 0).
+    /// Pure dielectric (κ = 0). Shorthand for `continuum_with_salt(..., 0.0)`.
+    #[must_use]
     pub fn continuum(eps_in: f64, eps_out: f64) -> Self {
-        Self {
-            eps_in,
-            eps_out,
-            kappa: 0.0,
-        }
+        Self::continuum_with_salt(eps_in, eps_out, 0.0)
     }
 
     /// Dielectric with salt (nonzero inverse Debye length).
+    #[must_use]
     pub fn continuum_with_salt(eps_in: f64, eps_out: f64, kappa: f64) -> Self {
         Self {
             eps_in,

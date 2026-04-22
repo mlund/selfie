@@ -21,8 +21,7 @@ pub(crate) fn build(radius: f64, subdivisions: usize) -> (Vec<DVec3>, Vec<[u32; 
             // f32→f64 conversion* rather than just multiplying by radius, so
             // any f32 drift from slerp subdivision is projected back onto the
             // sphere at f64 precision.
-            let v = DVec3::new(p.x as f64, p.y as f64, p.z as f64).normalize();
-            v * radius
+            p.as_dvec3().normalize() * radius
         })
         .collect();
 

@@ -19,6 +19,7 @@ use rayon::prelude::*;
 ///
 /// Holds the surface potential `f` and its outward normal derivative `h` at
 /// each face centroid. All field-evaluation methods read these densities.
+#[derive(Debug)]
 pub struct BemSolution<'s> {
     surface: &'s Surface,
     media: Dielectric,
@@ -60,18 +61,18 @@ impl<'s> BemSolution<'s> {
         }
         let (a_matrix, rhs) =
             assembly::build_block_system(surface, media, side, charge_positions, charge_values);
-        let solution = linalg::solve_dense(a_matrix, rhs)?;
+        let mut f = linalg::solve_dense(a_matrix, rhs)?;
 
-        let n = surface.num_faces();
         // why: block ordering in assembly is [f; h] (top = potential,
-        // bottom = normal derivative) — see assembly::build_block_system.
-        let (f, h) = solution.split_at(n);
+        // bottom = normal derivative). split_off moves ownership of the
+        // second half out in O(1) without a heap copy.
+        let h = f.split_off(surface.num_faces());
         Ok(Self {
             surface,
             media,
             side,
-            f: f.to_vec(),
-            h: h.to_vec(),
+            f,
+            h,
         })
     }
 
@@ -85,8 +86,7 @@ impl<'s> BemSolution<'s> {
         &self.h
     }
 
-    /// Reaction-field potential at a probe point on the same side of the
-    /// boundary as the solve's charges (reduced units, e/Å).
+    /// Reaction-field potential at a probe point (reduced units, e/Å).
     ///
     /// For interior solves the evaluator uses the Laplace Green's function
     /// `G_0` and Ω⁻-outward normal:
@@ -97,6 +97,13 @@ impl<'s> BemSolution<'s> {
     /// `κ = 0` recovers the plain Coulomb Green's function in the second
     /// form. The Coulomb / Yukawa source contribution is *not* included —
     /// this is φ − φ_source.
+    ///
+    /// **Contract**: `point` must lie on the same side of the dielectric
+    /// boundary as the charges passed to [`Self::solve`]. Evaluating on
+    /// the opposite side silently returns a wrong number — the BIE kernel
+    /// and jump sign are side-specific. No runtime check is performed;
+    /// callers that can't statically guarantee the side should inspect
+    /// their mesh.
     pub fn reaction_field_at(&self, point: [f64; 3]) -> f64 {
         reaction_field_at_impl(
             self.surface,
@@ -187,12 +194,16 @@ fn reaction_field_at_impl(
         ChargeSide::Interior => (0.0, -1.0, media.eps_out / media.eps_in),
         ChargeSide::Exterior => (media.kappa, 1.0, -1.0),
     };
+    let panels = f
+        .iter()
+        .zip(h)
+        .zip(&geom.normals)
+        .zip(&geom.areas)
+        .zip(&geom.tris);
     let mut sum = 0.0;
-    for b in 0..geom.len() {
-        let nb = geom.normals[b];
-        let ab = geom.areas[b];
+    for ((((&f_b, &h_b), &nb), &ab), &tri) in panels {
         let mut quad = 0.0;
-        for p in panel_integrals::gauss3_points(geom.tris[b]) {
+        for p in panel_integrals::gauss3_points(tri) {
             let d = r - p;
             let dist = d.length();
             let inv_r = 1.0 / dist;
@@ -200,7 +211,7 @@ fn reaction_field_at_impl(
             let g = exp_kr * inv_r / FOUR_PI;
             let dg_dn_source =
                 (kappa_eval * dist + 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r / FOUR_PI;
-            quad += f_sign * f[b] * dg_dn_source + h_coeff * g * h[b];
+            quad += f_sign * f_b * dg_dn_source + h_coeff * g * h_b;
         }
         sum += quad * ab / 3.0;
     }
