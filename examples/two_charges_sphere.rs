@@ -12,12 +12,13 @@ use selfie::analytical::kirkwood::pair_reaction_energy;
 
 fn main() {
     let a = 10.0_f64;
-    let r = 15.0_f64;
+    let r = 13.0_f64; // 3 Å from sphere surface
     let subdivisions = 7;
 
     let surface = Surface::icosphere(a, subdivisions);
     let media = Dielectric::continuum(2.0, 80.0);
-    let positions = [[r, 0.0, 0.0], [r * 0.5, r * (3.0_f64.sqrt() / 2.0), 0.0]];
+    // γ = 30° → chord 2 r sin(15°) ≈ 6.7 Å (salt-bridge pair).
+    let positions = [[r, 0.0, 0.0], [r * (3.0_f64.sqrt() / 2.0), r * 0.5, 0.0]];
     let values = [1.0_f64, -1.0_f64];
 
     // Per-charge solve to isolate the pair reaction-field energy cleanly.
@@ -31,7 +32,11 @@ fn main() {
     let phi_rf = sol.reaction_field_at(positions[1]);
     let w12_rf = values[1] * phi_rf;
 
-    println!("Geometry: sphere a = {a} Å, charges at r = {r} Å, 60° apart.");
+    let chord = 2.0 * r * (15.0_f64.to_radians()).sin();
+    println!(
+        "Geometry: sphere a = {a} Å, charges at r = {r} Å (3 Å standoff), \
+         30° apart → pair distance {chord:.2} Å."
+    );
     println!("Dielectric: ε_in = 2, ε_out = 80, κ = 0.");
     println!(
         "Mesh: hexasphere subdiv = {subdivisions} → {} triangles.",

@@ -21,11 +21,10 @@ use selfie::analytical::kirkwood::reaction_field_potential_unit_source;
 use selfie::{BemSolution, Dielectric, Surface};
 
 const A: f64 = 10.0; // sphere radius (Å)
-const R: f64 = 15.0; // charge/eval radius (Å) — 5 Å from surface; plan's
-// original 12 Å (only 2 Å standoff) is too close to
-// the surface for dense-LU mesh sizes to hit 1 %
-// (panel edge ~ 2 Å at subdiv = 7 ≥ charge-surface
-// gap).
+const R: f64 = 13.0; // charge/eval radius (Å) — 3 Å from surface. Close
+// enough to give a physically meaningful reaction field
+// (~0.3 kcal/mol pair-like scale) but still comfortably
+// larger than the panel edge ~ 1 Å at subdiv = 7.
 const EPS_IN: f64 = 2.0;
 const EPS_OUT: f64 = 80.0;
 
@@ -34,8 +33,9 @@ fn source() -> [f64; 3] {
 }
 
 fn eval_point() -> [f64; 3] {
-    // 60° in the xy plane.
-    [R * 0.5, R * (3f64.sqrt() / 2.0), 0.0]
+    // γ = 30°: chord |r_i − r_j| = 2 R sin(15°) ≈ 6.7 Å — salt-bridge-scale
+    // pair, both charges 3 Å from the dielectric surface.
+    [R * (3f64.sqrt() / 2.0), R * 0.5, 0.0]
 }
 
 fn bem_phi_rf(subdivisions: usize) -> f64 {
