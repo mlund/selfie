@@ -8,6 +8,7 @@
 pub(crate) mod bessel;
 mod legendre;
 
+pub mod born;
 pub mod kirkwood;
 pub mod kirkwood_inside;
 pub mod kirkwood_salt;
