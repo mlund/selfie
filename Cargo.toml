@@ -13,4 +13,5 @@ validation = []
 faer = "0.22"
 glam = "0.30"
 hexasphere = "18.0"
+rayon = "1.12.0"
 thiserror = "2"

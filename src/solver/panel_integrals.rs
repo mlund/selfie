@@ -1,45 +1,54 @@
-//! Panel-integrated kernels K₀ and K₀' for centroid collocation.
+//! Panel-integrated kernels K_κ and K_κ' for centroid collocation.
 //!
-//! K₀(a, b)  = ∫_{T_b} 1/(4π|c_a − s'|)            dS'
-//! K₀'(a, b) = ∫_{T_b} (c_a − s')·n_b / (4π|c_a − s'|³) dS'
+//! K_κ(a, b)  = ∫_{T_b} G_κ(c_a, s')                  dS'
+//! K_κ'(a, b) = ∫_{T_b} ∂_{n_b, s'} G_κ(c_a, s')       dS'
+//!
+//! with the Yukawa (screened-Coulomb) Green's function
+//! `G_κ(r, s) = exp(−κ|r − s|) / (4π|r − s|)`. `κ = 0` recovers the plain
+//! Coulomb kernel `G_0 = 1/(4πr)` so the same routines cover the Laplace
+//! top-block of the Juffer system and the Yukawa bottom-block.
 //!
 //! Two regimes:
 //! - **Off-diagonal** (a ≠ b): smooth integrand → 3-point barycentric
 //!   Gauss rule (degree 2, O(h³) per panel for polynomial integrands).
 //!   Needed because near-neighbour panels have a 1/r integrand that varies
 //!   fast enough to defeat 1-point centroid quadrature.
-//! - **Self-panel (a = b)**: K₀ is weakly singular (1/r). Closed-form
-//!   Wilton–Rao–Glisson 1984 evaluation — three logs per triangle, no Duffy
-//!   transform, no recursion. K₀' PV is 0 for a flat panel at its own
-//!   centroid (displacement `c − s'` lies in the panel plane, so its dot
-//!   product with `n_b` vanishes pointwise); the ½I jump in the BIE is a
-//!   separate matrix contribution, not a diagonal of K₀'.
+//! - **Self-panel (a = b)**: K_κ has a weak 1/r singularity. For κ = 0 we
+//!   use the Wilton–Rao–Glisson 1984 closed form (three logs per triangle,
+//!   no Duffy, no recursion). For κ > 0 we split G_κ = G_0 + (G_κ − G_0);
+//!   the singular part is WRG, the bounded smooth correction is evaluated
+//!   with 3-point Gauss (limit at r = 0 is −κ/(4π)). K_κ' PV is 0 for a
+//!   flat panel at its own centroid regardless of κ: `(c − s')·n_b`
+//!   vanishes pointwise for s' in the panel plane. The ½I jump in the BIE
+//!   is a separate matrix contribution, not a diagonal of K_κ'.
 
 use glam::DVec3;
 
 const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
 
-/// Off-diagonal K₀ via 3-point symmetric Gauss (barycentrics
+/// Off-diagonal K_κ via 3-point symmetric Gauss (barycentrics
 /// `(2/3, 1/6, 1/6)` + cyclic permutations, each weight 1/3).
-pub(crate) fn k0_off(observer: DVec3, tri: [DVec3; 3], ab: f64) -> f64 {
+/// Pass `kappa = 0.0` for the Laplace kernel G_0.
+pub(crate) fn k_off(observer: DVec3, tri: [DVec3; 3], ab: f64, kappa: f64) -> f64 {
     let mut acc = 0.0;
     for p in gauss3_points(tri) {
         let r = (observer - p).length();
-        acc += 1.0 / (FOUR_PI * r);
+        acc += (-kappa * r).exp() / r;
     }
-    acc * ab / 3.0
+    acc * ab / (3.0 * FOUR_PI)
 }
 
-/// Off-diagonal K₀': 3-point symmetric Gauss rule. Integrand
-/// `(c_a − s')·n_b / (4π |c_a − s'|³)`.
-pub(crate) fn k0_prime_off(observer: DVec3, tri: [DVec3; 3], nb: DVec3, ab: f64) -> f64 {
+/// Off-diagonal K_κ' via 3-point Gauss. Integrand
+/// `(κr + 1) · exp(−κr) · (c_a − s')·n_b / (4π r³)` with r = |c_a − s'|.
+pub(crate) fn k_prime_off(observer: DVec3, tri: [DVec3; 3], nb: DVec3, ab: f64, kappa: f64) -> f64 {
     let mut acc = 0.0;
     for p in gauss3_points(tri) {
         let d = observer - p;
         let r = d.length();
-        acc += d.dot(nb) / (FOUR_PI * r * r * r);
+        let exp_kr = (-kappa * r).exp();
+        acc += (kappa * r + 1.0) * exp_kr * d.dot(nb) / (r * r * r);
     }
-    acc * ab / 3.0
+    acc * ab / (3.0 * FOUR_PI)
 }
 
 /// Barycentric 3-point rule suited for smooth integrands on a triangle.
@@ -55,10 +64,37 @@ pub(crate) fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {
     ]
 }
 
-/// Self-panel K₀: Wilton–Rao–Glisson closed form for
-/// `∫_T 1/(4π|p − s'|) dS'` with `p` = in-plane observer (here, centroid).
+/// Self-panel K_κ = ∫_T G_κ(p, s') dS' at the panel centroid `p`.
 ///
-/// Derivation reference: Wilton, Rao, Glisson, *IEEE TAP* 1984
+/// Splits G_κ = G_0 + (G_κ − G_0). The singular part is Wilton–Rao–Glisson;
+/// the bounded correction `(exp(−κr) − 1) / (4π r)` — finite with limit
+/// −κ/(4π) as r → 0 — is integrated with 3-point Gauss.
+pub(crate) fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
+    let k0 = wrg_g0_self(tri, centroid);
+    if kappa == 0.0 {
+        return k0;
+    }
+    let area = 0.5 * (tri[1] - tri[0]).cross(tri[2] - tri[0]).length();
+    let mut corr = 0.0;
+    for p in gauss3_points(tri) {
+        let r = (centroid - p).length();
+        // why: (exp(−κr) − 1)/r is analytic at r = 0 with limit −κ; guard
+        // the Gauss point that may coincide with the centroid (it doesn't
+        // for the (2/3, 1/6, 1/6) rule — centroid has barycentric (1/3)³ —
+        // but f64 cancellation could still produce tiny r).
+        corr += if r > 1e-14 {
+            ((-kappa * r).exp() - 1.0) / r
+        } else {
+            -kappa
+        };
+    }
+    k0 + corr * area / (3.0 * FOUR_PI)
+}
+
+/// Wilton–Rao–Glisson closed form for `∫_T 1/(4π|p − s'|) dS'` with `p` in
+/// the panel plane (here, the centroid).
+///
+/// Reference: Wilton, Rao, Glisson, *IEEE TAP* 1984
 /// (https://doi.org/10.1109/TAP.1984.1143193).
 ///
 /// Algorithm: for each edge k with endpoints `v_k, v_{k+1}`, sum
@@ -67,7 +103,7 @@ pub(crate) fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {
 /// - `l_k^±` = signed distance from projection of `p` onto edge line to
 ///   the endpoints (positive along edge direction)
 /// - `d_k` = perpendicular in-plane distance from `p` to the edge line.
-pub(crate) fn k0_self_wrg(v: [DVec3; 3], p: DVec3) -> f64 {
+fn wrg_g0_self(v: [DVec3; 3], p: DVec3) -> f64 {
     // Triangle plane normal (unit). A self-panel lookup expects `p` in the
     // plane of the triangle; we still project to be robust against f64 drift.
     let e01 = v[1] - v[0];
@@ -175,7 +211,7 @@ mod tests {
 
         let expected = (s * (3f64.sqrt() / 2.0) * (7.0 + 4.0 * 3f64.sqrt()).ln())
             / (4.0 * core::f64::consts::PI);
-        let got = k0_self_wrg(v, centroid);
+        let got = k_self(v, centroid, 0.0);
 
         assert!(
             (got - expected).abs() < 1e-12,
@@ -184,6 +220,33 @@ mod tests {
             expected,
             (got - expected).abs()
         );
+    }
+
+    #[test]
+    fn k_self_yukawa_reduces_to_wrg_at_kappa_zero() {
+        let v = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.5, 3f64.sqrt() / 2.0, 0.0),
+        ];
+        let centroid = (v[0] + v[1] + v[2]) / 3.0;
+        let k0 = k_self(v, centroid, 0.0);
+        let kk = k_self(v, centroid, 1e-12);
+        assert!((k0 - kk).abs() / k0.abs() < 1e-10);
+    }
+
+    #[test]
+    fn k_self_yukawa_is_smaller_than_coulomb() {
+        // exp(−κr) ≤ 1 ⇒ K_κ_self ≤ K_0_self for κ > 0.
+        let v = [
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::new(0.5, 3f64.sqrt() / 2.0, 0.0),
+        ];
+        let centroid = (v[0] + v[1] + v[2]) / 3.0;
+        let k0 = k_self(v, centroid, 0.0);
+        let kk = k_self(v, centroid, 1.0);
+        assert!(kk < k0 && kk > 0.0);
     }
 
     #[test]
@@ -196,7 +259,7 @@ mod tests {
         let area = 0.5 * (v[1] - v[0]).cross(v[2] - v[0]).length();
         let observer = DVec3::new(5.0, 5.0, 10.0);
 
-        let three_point = k0_off(observer, v, area);
+        let three_point = k_off(observer, v, area, 0.0);
         let refined = refine_integrate_g0_off(v, observer, 50);
         let rel_err = (three_point - refined).abs() / refined.abs();
         // why: 3-point Gauss is exact for degree-2 polynomial integrands,

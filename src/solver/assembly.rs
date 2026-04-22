@@ -1,20 +1,26 @@
-//! Build the Juffer derivative-BIE block system for κ = 0:
+//! Build the Juffer derivative-BIE block system.
 //!
 //! ```text
-//! [ ½I + K₀'     −(ε_out/ε_in) K₀ ] [ f ]   [    0    ]
-//! [ ½I − K₀'            K₀        ] [ h ] = [ φ_coul  ]
+//! [ ½I + K₀'     −(ε_out/ε_in) K₀ ] [ f ]   [     0        ]
+//! [ ½I − K_κ'            K_κ      ] [ h ] = [ φ_yukawa     ]
 //! ```
 //!
-//! `f` = surface potential at each face centroid, `h` = outward normal
-//! derivative of φ_out, `φ_coul(c_a) = Σ_i q_i / (ε_out · |c_a − r_i|)`
-//! in reduced units. Reference: Juffer et al., *J. Comput. Phys.* 97
-//! (1991) 144–171, https://doi.org/10.1016/0021-9991(91)90043-K.
+//! - Top row comes from Green's 3rd identity applied to the Laplacian
+//!   interior (κ-independent; always G_0).
+//! - Bottom row uses the exterior Green's function G_κ and the
+//!   corresponding screened Coulomb source
+//!   `φ_yukawa(c_a) = Σ_i q_i · exp(−κ|c_a − r_i|) / (ε_out · |c_a − r_i|)`.
+//!   For `κ = 0` this reduces to the original Laplace BIE.
+//!
+//! Reference: Juffer et al., *J. Comput. Phys.* 97 (1991) 144–171,
+//! https://doi.org/10.1016/0021-9991(91)90043-K.
 
 use crate::geometry::Surface;
 use crate::solver::panel_integrals;
 use crate::units::Dielectric;
 use faer::Mat;
 use glam::DVec3;
+use rayon::prelude::*;
 
 pub(crate) fn build_block_system(
     surface: &Surface,
@@ -27,57 +33,71 @@ pub(crate) fn build_block_system(
     let size = 2 * n;
 
     let eps_ratio = media.eps_out / media.eps_in;
+    let kappa = media.kappa;
 
-    let mut mat = Mat::<f64>::zeros(size, size);
+    // why: we build the matrix in a flat row-major `Vec<f64>` because the
+    // outer a-loop is embarrassingly parallel at the row level (each `a`
+    // writes a disjoint top row and bottom row) while `faer::Mat` is
+    // column-major and doesn't expose a clean parallel-row mutation API.
+    // Converting to `faer::Mat` once at the end costs an O(size²) memcpy,
+    // negligible next to the O(size²) kernel work.
+    let mut flat = vec![0.0_f64; size * size];
+    let (flat_top, flat_bot) = flat.split_at_mut(n * size);
 
-    // why: we walk rows = observers a, columns = sources b. Diagonal case
-    // (a == b) uses the WRG closed form for K₀ and exact 0 for K₀' PV; the
-    // ½I jump is added as a constant to the diagonal of both blocks that
-    // carry it (top-left gets +½I, bottom-left gets +½I; K₀' blocks get the
-    // integrated K₀' values, with 0 on the self-panel).
-    for a in 0..n {
-        let ca = geom.centroids[a];
-        for b in 0..n {
-            let nb = geom.normals[b];
-            let ab = geom.areas[b];
-            let tri = geom.tris[b];
+    flat_top
+        .par_chunks_mut(size)
+        .zip(flat_bot.par_chunks_mut(size))
+        .enumerate()
+        .for_each(|(a, (top_row, bot_row))| {
+            let ca = geom.centroids[a];
+            for b in 0..n {
+                let nb = geom.normals[b];
+                let ab = geom.areas[b];
+                let tri = geom.tris[b];
 
-            let (k0, k0p) = if a == b {
-                // Self-panel. K₀: Wilton–Rao–Glisson closed form.
-                // K₀': PV vanishes for flat panel at its own centroid.
-                (panel_integrals::k0_self_wrg(tri, ca), 0.0)
-            } else {
-                (
-                    panel_integrals::k0_off(ca, tri, ab),
-                    panel_integrals::k0_prime_off(ca, tri, nb, ab),
-                )
-            };
+                // why: top block needs G_0 kernels (Laplace interior),
+                // bottom block needs G_κ kernels (screened PB exterior).
+                // Self-panel K₀' and K_κ' PVs both vanish for flat
+                // centroid-collocation — same planar-displacement argument.
+                let (k0, k0p, kk, kkp) = if a == b {
+                    (
+                        panel_integrals::k_self(tri, ca, 0.0),
+                        0.0,
+                        panel_integrals::k_self(tri, ca, kappa),
+                        0.0,
+                    )
+                } else {
+                    (
+                        panel_integrals::k_off(ca, tri, ab, 0.0),
+                        panel_integrals::k_prime_off(ca, tri, nb, ab, 0.0),
+                        panel_integrals::k_off(ca, tri, ab, kappa),
+                        panel_integrals::k_prime_off(ca, tri, nb, ab, kappa),
+                    )
+                };
 
-            // Top-left: ½I + K₀'
-            // Top-right: −(ε_out/ε_in) K₀
-            // Bottom-left: ½I − K₀'
-            // Bottom-right: K₀
-            let half_i = if a == b { 0.5 } else { 0.0 };
-            mat[(a, b)] = half_i + k0p;
-            mat[(a, n + b)] = -eps_ratio * k0;
-            mat[(n + a, b)] = half_i - k0p;
-            mat[(n + a, n + b)] = k0;
-        }
-    }
+                let half_i = if a == b { 0.5 } else { 0.0 };
+                top_row[b] = half_i + k0p;
+                top_row[n + b] = -eps_ratio * k0;
+                bot_row[b] = half_i - kkp;
+                bot_row[n + b] = kk;
+            }
+        });
 
-    // RHS: [0; φ_coul].
+    // Flat row-major → faer column-major.
+    let mat = Mat::<f64>::from_fn(size, size, |i, j| flat[i * size + j]);
+
+    // RHS: [0; φ_yukawa]. Tiny loop, not worth parallelising.
     let mut rhs = vec![0.0_f64; size];
-    for a in 0..n {
+    for (a, out) in rhs.iter_mut().skip(n).enumerate() {
         let ca = geom.centroids[a];
         let mut phi = 0.0;
         for (pos, &q) in charge_positions.iter().zip(charge_values.iter()) {
-            let r = DVec3::from(*pos);
-            let dist = (ca - r).length();
-            // why: reduced-units Coulomb — prefactor is 1/ε_out, no 4π or k_e.
-            // This matches the kernel convention (bem_pb_plan.md §0).
-            phi += q / (media.eps_out * dist);
+            let dist = (ca - DVec3::from(*pos)).length();
+            // why: screened-Coulomb (Yukawa) source in reduced units —
+            // prefactor 1/ε_out, no 4π or k_e. κ = 0 ⇒ plain Coulomb.
+            phi += q * (-kappa * dist).exp() / (media.eps_out * dist);
         }
-        rhs[n + a] = phi;
+        *out = phi;
     }
 
     (mat, rhs)

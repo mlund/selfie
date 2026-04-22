@@ -49,10 +49,6 @@ impl<'s> BemSolution<'s> {
                 values: charge_values.len(),
             });
         }
-        // why: κ > 0 requires a second block with Yukawa kernels alongside
-        // K₀, K₀'; deferred to the next milestone.
-        assert!(media.kappa == 0.0, "κ > 0 not yet implemented");
-
         let (a_matrix, rhs) =
             assembly::build_block_system(surface, media, charge_positions, charge_values);
         let solution = linalg::solve_dense(a_matrix, rhs)?;
@@ -82,11 +78,18 @@ impl<'s> BemSolution<'s> {
     /// Reaction-field potential at a single external point (reduced units, e/Å).
     ///
     /// Evaluates the exterior Green's-3rd-identity representation
-    ///   `φ_rf(r) = ∫_Γ [ f · ∂_{n,s}G₀(r, s') − G₀(r, s') · h ] dS'`
-    /// using a 3-point Gauss rule per panel. The Coulomb contribution is
-    /// *not* included — this is φ − φ_coul.
+    ///   `φ_rf(r) = ∫_Γ [ f · ∂_{n,s}G_κ(r, s') − G_κ(r, s') · h ] dS'`
+    /// using a 3-point Gauss rule per panel. `κ = 0` recovers the plain
+    /// Coulomb Green's function. The Coulomb / Yukawa source contribution
+    /// is *not* included — this is φ − φ_source.
     pub fn reaction_field_at(&self, point: [f64; 3]) -> f64 {
-        reaction_field_at_impl(self.surface, &self.f, &self.h, DVec3::from(point))
+        reaction_field_at_impl(
+            self.surface,
+            &self.f,
+            &self.h,
+            DVec3::from(point),
+            self.media.kappa,
+        )
     }
 
     /// Batched reaction-field evaluation at many external points.
@@ -144,11 +147,14 @@ impl<'s> BemSolution<'s> {
     }
 }
 
-fn reaction_field_at_impl(surface: &Surface, f: &[f64], h: &[f64], r: DVec3) -> f64 {
+fn reaction_field_at_impl(surface: &Surface, f: &[f64], h: &[f64], r: DVec3, kappa: f64) -> f64 {
     // why: evaluator uses the same 3-point Gauss rule as the assembly
     // off-diagonal so the two stages share convergence order. Sign follows
     // Green's 3rd identity applied to Ω⁺ (outward normal −n):
-    //   φ_rf = ∫_Γ [f · ∂_{n,s}G − G · h] dS'.
+    //   φ_rf = ∫_Γ [f · ∂_{n,s}G_κ − G_κ · h] dS'.
+    // For κ = 0 the Yukawa factors (exp, κr+1) collapse to 1 and we get
+    // the plain Coulomb kernel back.
+    const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
     let geom = surface.geom_internal();
     let mut sum = 0.0;
     for b in 0..geom.len() {
@@ -157,10 +163,13 @@ fn reaction_field_at_impl(surface: &Surface, f: &[f64], h: &[f64], r: DVec3) -> 
         let mut quad = 0.0;
         for p in panel_integrals::gauss3_points(geom.tris[b]) {
             let d = r - p;
-            let inv_r = 1.0 / d.length();
-            let g0 = inv_r / (4.0 * core::f64::consts::PI);
-            let dg0_dn_source = d.dot(nb) * inv_r * inv_r * inv_r / (4.0 * core::f64::consts::PI);
-            quad += f[b] * dg0_dn_source - g0 * h[b];
+            let dist = d.length();
+            let inv_r = 1.0 / dist;
+            let exp_kr = (-kappa * dist).exp();
+            let gk = exp_kr * inv_r / FOUR_PI;
+            let dgk_dn_source =
+                (kappa * dist + 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r / FOUR_PI;
+            quad += f[b] * dgk_dn_source - gk * h[b];
         }
         sum += quad * ab / 3.0;
     }
