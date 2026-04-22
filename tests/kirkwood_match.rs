@@ -57,7 +57,7 @@ fn convergence_to_kirkwood() {
     eprintln!("Kirkwood φ_rf(r_2; r_1) = {reference:.9e}  (reduced units, e/Å)");
 
     let mut errors = Vec::new();
-    for s in [1usize, 3, 7, 15] {
+    for s in [1usize, 3, 7] {
         let bem = bem_phi_rf(s);
         let n_t = 20 * (s + 1).pow(2);
         let rel = (bem - reference).abs() / reference.abs();

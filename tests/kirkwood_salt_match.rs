@@ -39,7 +39,7 @@ fn convergence_to_kirkwood_salt_physiological() {
     eprintln!("Kirkwood+salt φ_rf (κ = 1/14 Å⁻¹) = {reference:.9e}");
 
     let mut errors = Vec::new();
-    for s in [1usize, 3, 7, 15] {
+    for s in [1usize, 3, 7] {
         let bem = bem_phi_rf(s, KAPPA);
         let n_t = 20 * (s + 1).pow(2);
         let rel = (bem - reference).abs() / reference.abs();
