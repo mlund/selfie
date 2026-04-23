@@ -26,7 +26,7 @@
 
 use crate::error::{Error, Result};
 use crate::geometry::Surface;
-use crate::solver::BemSolution;
+use crate::solver::{BemSolution, SolveContext};
 use crate::units::{ChargeSide, Dielectric};
 use rayon::prelude::*;
 
@@ -87,19 +87,22 @@ impl<'s> LinearResponse<'s> {
         sites: &[[f64; 3]],
     ) -> Result<Self> {
         let n = sites.len();
-        // why: basis solves run sequentially; each already saturates
-        // all cores through rayon inside `BemOperator::apply` and
-        // `reaction_field_at_many`. Running them in parallel would
-        // oversubscribe the thread pool.
+        // why: the operator (Barnes-Hut tree) and the RAS
+        // preconditioner depend on geometry + dielectric only; they
+        // are identical across all N basis solves. Building them
+        // once inside a `SolveContext` and feeding per-site RHS
+        // amortises the setup cost linearly in N — on lysozyme
+        // (N_sites ≈ 50) the RAS build is tens of percent of each
+        // cold solve, so the savings are substantial.
+        //
+        // Basis solves themselves still run sequentially; each
+        // already saturates all cores through rayon inside the
+        // operator apply and `reaction_field_at_many`.
+        let ctx = SolveContext::new(surface, media, side);
         let mut bases = Vec::with_capacity(n);
         for site in sites {
-            bases.push(BemSolution::solve(
-                surface,
-                media,
-                side,
-                core::slice::from_ref(site),
-                &[1.0],
-            )?);
+            let (f, h) = ctx.solve_charges(core::slice::from_ref(site), &[1.0])?;
+            bases.push(BemSolution::from_densities(surface, media, side, f, h));
         }
 
         let mut response_matrix = vec![0.0_f64; n * n];

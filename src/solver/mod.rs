@@ -5,12 +5,15 @@
 //! crate-internal.
 
 mod assembly;
+mod context;
 mod gmres;
 mod kernel;
 mod operator;
 mod panel_integrals;
 mod precond;
 mod treecode;
+
+pub(crate) use context::SolveContext;
 
 use crate::error::{Error, Result};
 use crate::geometry::Surface;
@@ -58,24 +61,8 @@ impl<'s> BemSolution<'s> {
         charge_positions: &[[f64; 3]],
         charge_values: &[f64],
     ) -> Result<Self> {
-        if charge_positions.len() != charge_values.len() {
-            return Err(Error::ChargeLenMismatch {
-                positions: charge_positions.len(),
-                values: charge_values.len(),
-            });
-        }
-        let rhs = assembly::build_rhs(surface, media, side, charge_positions, charge_values);
-        let op = operator::BemOperator::new(
-            surface.geom_internal(),
-            media.eps_out / media.eps_in,
-            media.kappa,
-        );
-        let mut f = gmres::solve(op, rhs)?;
-
-        // why: block ordering in assembly is [f; h] (top = potential,
-        // bottom = normal derivative). split_off moves ownership of the
-        // second half out in O(1) without a heap copy.
-        let h = f.split_off(surface.num_faces());
+        let ctx = SolveContext::new(surface, media, side);
+        let (f, h) = ctx.solve_charges(charge_positions, charge_values)?;
         Ok(Self {
             surface,
             media,
@@ -83,6 +70,26 @@ impl<'s> BemSolution<'s> {
             f,
             h,
         })
+    }
+
+    /// Crate-internal constructor from pre-solved surface densities.
+    /// `LinearResponse::precompute` uses this to build one
+    /// `BemSolution` per basis from a shared [`SolveContext`],
+    /// amortising the operator + preconditioner build across sites.
+    pub(crate) const fn from_densities(
+        surface: &'s Surface,
+        media: Dielectric,
+        side: ChargeSide,
+        f: Vec<f64>,
+        h: Vec<f64>,
+    ) -> Self {
+        Self {
+            surface,
+            media,
+            side,
+            f,
+            h,
+        }
     }
 
     /// Surface potential `f` at each face centroid (reduced units).
