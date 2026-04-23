@@ -123,13 +123,12 @@ impl<'g> PointTreecode<'g> {
 
         // why: `block_entries`'s panel-integrated kernels include area
         // implicitly (as `∫_{T_b} ... dS'`), so the point-source
-        // multipole replacement must multiply density by area. Two
-        // expansion stores: the spherical-harmonic single-layer
-        // moments drive the Laplace `K₀·h` sums (accuracy
-        // `(ε/R)^(P+1)` at `P = 6`); the cartesian Taylor-order-2
-        // moments still drive Yukawa + double-layer until stages 1.3
-        // move both onto the spherical-harmonic basis.
-        let (sh_exps, cart_exps) = self.build_bem_expansions(x_f, x_h);
+        // multipole replacement must multiply density by area. The
+        // spherical-harmonic store now carries both Laplace single-
+        // and double-layer moments (accuracy `(ε/R)^(P+1)` at
+        // `P = 6`); the cartesian store is only built when `κ > 0` to
+        // serve the Yukawa pair, and is empty otherwise.
+        let (sh_exps, cart_exps) = self.build_bem_expansions(x_f, x_h, kappa);
 
         (0..n)
             .into_par_iter()
@@ -145,36 +144,43 @@ impl<'g> PointTreecode<'g> {
             .unzip()
     }
 
-    /// Build BEM moments. Returns `(sh_exps, cart_exps)` where the SH
-    /// store carries the Laplace single-layer moments (from `h · area`)
-    /// and the cartesian store carries Yukawa single-layer + both
-    /// double-layer moments.
+    /// Build BEM moments. The SH store always carries both Laplace
+    /// single- and double-layer moments. The cartesian store is empty
+    /// when `κ = 0` (Yukawa traversal is skipped; reusing the Laplace
+    /// values) and populated otherwise for the Yukawa pair.
     ///
-    /// why: the two sweeps are fully independent (disjoint output
-    /// buffers, all inputs immutable); `rayon::join` halves the
-    /// build-phase wallclock on multicore machines without any data
-    /// hazards to reason about.
+    /// why: when screening is active, the two sweeps are fully
+    /// independent (disjoint output buffers, all inputs immutable);
+    /// `rayon::join` halves the build-phase wallclock on multicore
+    /// machines without any data hazards to reason about.
     fn build_bem_expansions(
         &self,
         x_f: &[f64],
         x_h: &[f64],
+        kappa: f64,
     ) -> (Vec<ShExpansion>, Vec<Expansion>) {
         let geom = self.geom;
-        rayon::join(
-            || {
-                self.build_sh_expansions_with(|exp, pid| {
-                    exp.accumulate(geom.centroids[pid], x_h[pid] * geom.areas[pid]);
-                })
-            },
-            || {
-                self.build_expansions_with(|exp, pid| {
-                    let s = geom.centroids[pid];
-                    let area = geom.areas[pid];
-                    exp.accumulate(s, x_h[pid] * area);
-                    exp.accumulate_dipole(s, x_f[pid] * area, geom.normals[pid]);
-                })
-            },
-        )
+        let sh_leaf = |exp: &mut ShExpansion, pid: usize| {
+            let s = geom.centroids[pid];
+            let area = geom.areas[pid];
+            exp.accumulate(s, x_h[pid] * area);
+            exp.accumulate_dipole(s, x_f[pid] * area, geom.normals[pid]);
+        };
+        if kappa == 0.0 {
+            (self.build_sh_expansions_with(sh_leaf), Vec::new())
+        } else {
+            rayon::join(
+                || self.build_sh_expansions_with(sh_leaf),
+                || {
+                    self.build_expansions_with(|exp, pid| {
+                        let s = geom.centroids[pid];
+                        let area = geom.areas[pid];
+                        exp.accumulate(s, x_h[pid] * area);
+                        exp.accumulate_dipole(s, x_f[pid] * area, geom.normals[pid]);
+                    })
+                },
+            )
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -213,13 +219,13 @@ impl<'g> PointTreecode<'g> {
             }
             let dist = (target - node.bbox.center).length();
             if node.bbox.bounding_radius() < self.theta * dist {
-                // Laplace single-layer through the spherical-harmonic
-                // moments; the cartesian store supplies the Laplace
-                // double-layer `K'₀` and, when screening is active,
-                // the full Yukawa pair. See module doc on
-                // `solid_harmonic.rs` for the underlying series.
-                let k0_far = sh_exps[idx].evaluate_laplace(target);
-                let k0p_far = cart_exps[idx].evaluate_double_laplace(target);
+                // Laplace pair `(k0, k0p)` through the spherical-
+                // harmonic store sharing one `irregular_solid_harmonic`
+                // table. Yukawa stays on the cartesian store until
+                // its SH migration (deferred — the Bessel-coupling
+                // M2M is non-trivial; the Laplace formula does not
+                // carry over because ρ changes under translation).
+                let (k0_far, k0p_far) = sh_exps[idx].evaluate_laplace_pair(target);
                 top += k0p_far - eps_ratio * k0_far;
                 if kappa == 0.0 {
                     // κ = 0: Yukawa ≡ Laplace, skip the second pair.

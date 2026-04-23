@@ -1,5 +1,5 @@
 //! Complex solid spherical harmonics and a matching multipole
-//! expansion for the Laplace single-layer kernel.
+//! expansion for the Laplace single- and double-layer kernels.
 //!
 //! Convention (Epton-Dembart / Greengard-Rokhlin compatible): for
 //! `0 ≤ m ≤ n`,
@@ -54,7 +54,7 @@ pub(super) const fn idx(n: usize, m: usize) -> usize {
 /// the `(n + m)!` scaling absorbs Legendre's factorial growth so the
 /// coefficients stay `O(r^n)`.
 pub(super) fn regular_solid_harmonic(r: DVec3) -> [c64; NCOEF] {
-    let mut out = [c64::new(0.0, 0.0); NCOEF];
+    let mut out = [c64::default(); NCOEF];
     out[idx(0, 0)] = c64::new(1.0, 0.0);
 
     let xy = c64::new(r.x, r.y);
@@ -102,7 +102,7 @@ pub(super) fn irregular_solid_harmonic(r: DVec3) -> [c64; NCOEF] {
     let inv_r = r2.sqrt().recip();
     let inv_r2 = 1.0 / r2;
 
-    let mut out = [c64::new(0.0, 0.0); NCOEF];
+    let mut out = [c64::default(); NCOEF];
     out[idx(0, 0)] = c64::new(inv_r, 0.0);
 
     let xy = c64::new(r.x, r.y);
@@ -147,26 +147,53 @@ fn mirror_negative_m(out: &mut [c64; NCOEF]) {
     }
 }
 
-/// Spherical-harmonic multipole expansion, single-layer Laplace only
-/// at this stage. Moments are
+/// Spherical-harmonic multipole expansion covering both the Laplace
+/// single-layer and the Laplace double-layer kernels.
+///
+/// Single-layer moments:
 /// ```text
 /// M_n^m = Σ_i q_i · conj(R_n^m(s_i − center))
 /// ```
-/// and [`Self::evaluate_laplace`] contracts them against the
-/// irregular harmonic at the target, dividing by `4π` to match the
-/// solver's `G_0(r, s) = 1 / (4π |r − s|)` normalization.
+/// Double-layer moments (source-side normal derivative):
+/// ```text
+/// Md_n^m = Σ_b f_b · (n_b · conj(∇_s R_n^m(s_b − center)))
+/// ```
+/// where `n_b · ∇_s R_n^m` expands via the closed-form recurrences
+/// ```text
+/// ∂R_n^m/∂x = ½ (R_{n−1}^{m−1} − R_{n−1}^{m+1})
+/// ∂R_n^m/∂y = (i/2) (R_{n−1}^{m−1} + R_{n−1}^{m+1})
+/// ∂R_n^m/∂z = R_{n−1}^m
+/// ```
+/// Both moment sets contract against the same `S_n^m(r − center)`
+/// table at evaluate time; [`Self::evaluate_laplace_pair`] returns
+/// `(single, double)` in one pass to share that table and the
+/// `r − center` subtraction.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ShExpansion {
     pub(super) center: DVec3,
     pub(super) coeffs: [c64; NCOEF],
+    pub(super) double_coeffs: [c64; NCOEF],
 }
 
 impl Default for ShExpansion {
     fn default() -> Self {
         Self {
             center: DVec3::ZERO,
-            coeffs: [c64::new(0.0, 0.0); NCOEF],
+            coeffs: [c64::default(); NCOEF],
+            double_coeffs: [c64::default(); NCOEF],
         }
+    }
+}
+
+/// Safe access to the full `R_n^m` table: returns zero for
+/// `|m| > n`, which the source-gradient recurrences need at boundary
+/// rows (e.g. `R_{n−1}^{n}` for the `R_n^{n−1}` derivative).
+#[inline]
+fn reg_at(reg: &[c64; NCOEF], n: usize, m: isize) -> c64 {
+    if m.unsigned_abs() > n {
+        c64::default()
+    } else {
+        reg[(n * n + n).wrapping_add_signed(m)]
     }
 }
 
@@ -179,26 +206,82 @@ impl ShExpansion {
         }
     }
 
+    /// Accumulate one double-layer source: panel at `s` with density
+    /// `f` and outward unit normal `n`. The source-gradient
+    /// recurrences let us build `n · conj(∇_s R_n^m)` from the same
+    /// regular-harmonic table as single-layer — one `regular_solid_harmonic`
+    /// call covers both. Contribution to row `n = 0` is identically
+    /// zero (`∇R_0^0 = 0`), so the inner loop starts at `n = 1`.
+    pub(super) fn accumulate_dipole(&mut self, s: DVec3, f: f64, n: DVec3) {
+        // why: the inner loop only ever reads `conj(R_{l-1}^*)`;
+        // folding the 49 negations into one up-front pass strips
+        // `.conj()` from the hot path.
+        let reg: [c64; NCOEF] = regular_solid_harmonic(s - self.center).map(|c| c.conj());
+        // why: n · ∇R_l^m in our convention collapses to
+        //   n_minus · R*_{l-1,m-1} − n_plus · R*_{l-1,m+1} + n_z · R*_{l-1,m}
+        // with n_plus = (n_x + i n_y)/2 and n_minus = conj(n_plus).
+        let n_plus = c64::new(n.x * 0.5, n.y * 0.5);
+        let n_minus = n_plus.conj();
+        let n_z = c64::new(n.z, 0.0);
+        let f_c = c64::new(f, 0.0);
+        for l in 1..=P {
+            let lm1 = l - 1;
+            let l_sig = l as isize;
+            for m in -l_sig..=l_sig {
+                let r_lo = reg_at(&reg, lm1, m - 1);
+                let r_hi = reg_at(&reg, lm1, m + 1);
+                let r_mid = reg_at(&reg, lm1, m);
+                let contrib = n_minus * r_lo - n_plus * r_hi + n_z * r_mid;
+                let slot = (l * l + l).wrapping_add_signed(m);
+                self.double_coeffs[slot] += contrib * f_c;
+            }
+        }
+    }
+
     /// Evaluate `Σ_i q_i / (4π |r − s_i|)` at target `r`. Caller must
     /// guarantee `|r − center| > max_i |s_i − center|` for the
     /// truncated series to converge — debug-asserted only via the
     /// underlying `r² > 0` check inside [`irregular_solid_harmonic`].
     pub(super) fn evaluate_laplace(&self, r: DVec3) -> f64 {
+        self.evaluate_laplace_pair(r).0
+    }
+
+    /// Double-layer Laplace evaluator: `Σ_b f_b · n_b · ∇_s G_0(r, s_b)`.
+    pub(super) fn evaluate_double_laplace(&self, r: DVec3) -> f64 {
+        self.evaluate_laplace_pair(r).1
+    }
+
+    /// Combined `(single, double)` evaluator. Shares the irregular
+    /// solid-harmonic table + the `r − center` subtraction — the
+    /// hot-path production caller (`traverse_bem`) always wants both.
+    pub(super) fn evaluate_laplace_pair(&self, r: DVec3) -> (f64, f64) {
         let s = irregular_solid_harmonic(r - self.center);
-        let mut sum = c64::new(0.0, 0.0);
-        for (&coef, &sn) in self.coeffs.iter().zip(s.iter()) {
-            sum += coef * sn;
+        let mut sum_single = c64::default();
+        let mut sum_double = c64::default();
+        for ((&cs, &cd), &sn) in self
+            .coeffs
+            .iter()
+            .zip(&self.double_coeffs)
+            .zip(s.iter())
+        {
+            sum_single += cs * sn;
+            sum_double += cd * sn;
         }
         // why: real-valued sources give M_n^{−m} = (−1)^m · conj(M_n^m);
         // paired with S_n^{−m} = (−1)^m · conj(S_n^m), cross-m terms
         // collapse to complex-conjugate pairs that cancel in the
         // imaginary part up to fp roundoff.
         debug_assert!(
-            sum.im.abs() < 1e-6 * sum.re.abs().max(1.0),
-            "Laplace SH evaluator: unexpected imaginary residual {:e}",
-            sum.im
+            sum_single.im.abs() < 1e-6 * sum_single.re.abs().max(1.0),
+            "Laplace SH single: imaginary residual {:e}",
+            sum_single.im
         );
-        sum.re / FOUR_PI
+        debug_assert!(
+            sum_double.im.abs() < 1e-6 * sum_double.re.abs().max(1.0),
+            "Laplace SH double: imaginary residual {:e}",
+            sum_double.im
+        );
+        (sum_single.re / FOUR_PI, sum_double.re / FOUR_PI)
     }
 
     /// Merge `other` into `self`, requiring identical centres. Used by
@@ -212,6 +295,9 @@ impl ShExpansion {
         for (a, b) in self.coeffs.iter_mut().zip(&other.coeffs) {
             *a += b;
         }
+        for (a, b) in self.double_coeffs.iter_mut().zip(&other.double_coeffs) {
+            *a += b;
+        }
     }
 
     /// Translate the expansion to a new centre via the M2M operator:
@@ -220,19 +306,24 @@ impl ShExpansion {
     /// ```
     /// with `δ = c₂ − c₁`, derived from the regular-harmonic addition
     /// theorem `R_n^m(s − δ) = Σ R_{n−k}^{m−j}(s) · R_k^j(−δ)`.
-    /// `O(P⁴)` complex multiplies per shift.
+    /// `O(P⁴)` complex multiplies per shift. The double-layer moments
+    /// transform by the same kernel — `∂/∂s_α` commutes with the
+    /// constant shift δ, so applying the translation theorem to
+    /// `∇_s R_n^m(s − c₂)` lands the same per-coefficient coupling.
     pub(super) fn shifted_to(&self, new_center: DVec3) -> Self {
         let delta = new_center - self.center;
         // why: conjugate the shift table up front (49 negations) so the
         // quadruple inner loop sees a bare complex multiply. Also lets
         // us fold the `.conj()` out of the hottest path.
         let r_conj: [c64; NCOEF] = regular_solid_harmonic(-delta).map(|c| c.conj());
-        let mut new_coeffs = [c64::new(0.0, 0.0); NCOEF];
+        let mut new_single = [c64::default(); NCOEF];
+        let mut new_double = [c64::default(); NCOEF];
         for n in 0..=P {
             let n_sig = n as isize;
             let row_out = n * n + n;
             for m in -n_sig..=n_sig {
-                let mut sum = c64::new(0.0, 0.0);
+                let mut s_sum = c64::default();
+                let mut d_sum = c64::default();
                 for k in 0..=n {
                     let k_sig = k as isize;
                     let np = n - k;
@@ -246,16 +337,20 @@ impl ShExpansion {
                     let row_np = np * np + np;
                     for j in j_lo..=j_hi {
                         let rc = r_conj[row_k.wrapping_add_signed(j)];
-                        let mc = self.coeffs[row_np.wrapping_add_signed(m - j)];
-                        sum += rc * mc;
+                        let src_slot = row_np.wrapping_add_signed(m - j);
+                        s_sum += rc * self.coeffs[src_slot];
+                        d_sum += rc * self.double_coeffs[src_slot];
                     }
                 }
-                new_coeffs[row_out.wrapping_add_signed(m)] = sum;
+                let out_slot = row_out.wrapping_add_signed(m);
+                new_single[out_slot] = s_sum;
+                new_double[out_slot] = d_sum;
             }
         }
         Self {
             center: new_center,
-            coeffs: new_coeffs,
+            coeffs: new_single,
+            double_coeffs: new_double,
         }
     }
 
@@ -330,7 +425,7 @@ mod tests {
         let r = DVec3::new(4.0, 2.5, -3.0);
         let reg = regular_solid_harmonic(s);
         let irr = irregular_solid_harmonic(r);
-        let mut sum = c64::new(0.0, 0.0);
+        let mut sum = c64::default();
         for (&rs, &ss) in reg.iter().zip(irr.iter()) {
             sum += rs.conj() * ss;
         }
@@ -403,6 +498,111 @@ mod tests {
         assert!(prev < 1e-10, "far-field error too large: {prev:e}");
     }
 
+    /// Direct dipole sum `Σ_b f_b · n_b · ∇_s G_0(r, s_b)` for the
+    /// Laplace kernel. Exact reference for the double-layer tests.
+    fn direct_double_sum(sources: &[(DVec3, f64, DVec3)], target: DVec3) -> f64 {
+        sources
+            .iter()
+            .map(|&(s, f, n)| {
+                let d = target - s;
+                let r = d.length();
+                f * n.dot(d) / (FOUR_PI * r * r * r)
+            })
+            .sum()
+    }
+
+    #[test]
+    fn sh_double_single_source_at_center_is_exact() {
+        // With one source at the expansion centre, only Md_1^m
+        // coefficients are nonzero; the truncated evaluator still
+        // reproduces the full dipole field since ∇R_1^m spans
+        // ∂/∂{x,y,z} R_0^0.
+        let c = DVec3::new(1.0, 2.0, 3.0);
+        let n = DVec3::new(0.3, -0.4, 0.866_025).normalize();
+        let mut exp = ShExpansion {
+            center: c,
+            ..ShExpansion::default()
+        };
+        exp.accumulate_dipole(c, 2.5, n);
+        let target = DVec3::new(10.0, 10.0, 10.0);
+        let got = exp.evaluate_double_laplace(target);
+        let expected = direct_double_sum(&[(c, 2.5, n)], target);
+        assert!(
+            (got - expected).abs() < 1e-14,
+            "got={got}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn sh_double_far_field_decays_monotonically() {
+        // Cluster of 10 point-dipoles in a small ball; relative error
+        // must shrink with distance. At P = 6 the truncation envelope
+        // is still (ε/R)^7.
+        let sources: Vec<(DVec3, f64, DVec3)> = (0..10)
+            .map(|i| {
+                let t = i as f64 * 0.21;
+                let s = DVec3::new(t.sin(), t.cos() * 0.8, (2.0 * t).sin()) * 0.5;
+                let n = DVec3::new(t.cos(), -(t.sin()), (t * 3.0).sin()).normalize();
+                (s, 1.0 + 0.1 * i as f64, n)
+            })
+            .collect();
+        let mut exp = ShExpansion {
+            center: DVec3::ZERO,
+            ..ShExpansion::default()
+        };
+        for &(s, f, n) in &sources {
+            exp.accumulate_dipole(s, f, n);
+        }
+        let mut prev = f64::INFINITY;
+        for distance in [5.0_f64, 10.0, 20.0, 40.0] {
+            let target = DVec3::new(distance, 0.3 * distance, -0.1 * distance);
+            let approx = exp.evaluate_double_laplace(target);
+            let exact = direct_double_sum(&sources, target);
+            let rel = (approx - exact).abs() / exact.abs();
+            assert!(rel < prev, "d={distance}: rel={rel:e}, prev={prev:e}");
+            prev = rel;
+        }
+        assert!(prev < 1e-9, "far-field double error too large: {prev:e}");
+    }
+
+    #[test]
+    fn sh_double_shift_matches_rebuild() {
+        // M2M shift must preserve double-layer moments bit-for-bit.
+        let c1 = DVec3::new(0.1, 0.2, 0.3);
+        let c2 = DVec3::new(1.0, -0.5, 0.8);
+        let sources: Vec<(DVec3, f64, DVec3)> = (0..6)
+            .map(|i| {
+                let t = i as f64 * 0.3;
+                let s = c1 + DVec3::new(t.sin(), t.cos(), (2.0 * t).sin()) * 0.1;
+                let n = DVec3::new(t.cos(), -t.sin(), (t + 0.5).sin()).normalize();
+                (s, 1.0, n)
+            })
+            .collect();
+        let mut at_c1 = ShExpansion {
+            center: c1,
+            ..ShExpansion::default()
+        };
+        let mut at_c2 = ShExpansion {
+            center: c2,
+            ..ShExpansion::default()
+        };
+        for &(s, f, n) in &sources {
+            at_c1.accumulate_dipole(s, f, n);
+            at_c2.accumulate_dipole(s, f, n);
+        }
+        let shifted = at_c1.shifted_to(c2);
+        for (i, (&got, &want)) in shifted
+            .double_coeffs
+            .iter()
+            .zip(&at_c2.double_coeffs)
+            .enumerate()
+        {
+            let diff = (got - want).norm();
+            let scale = 1.0 + want.norm();
+            assert!(diff < 1e-11 * scale, "coeff {i}: diff={diff:e}");
+        }
+    }
+
     #[test]
     fn sh_shift_matches_rebuild_from_sources() {
         // Accumulate at c₁, shift to c₂; compare coefficient-by-
@@ -435,18 +635,38 @@ mod tests {
 
     #[test]
     fn sh_fold_matches_single_accumulate() {
+        // Both coefficient arrays must fold distributively — single-
+        // layer moments and double-layer moments are independent
+        // linear accumulators and fold visits both.
         let c = DVec3::new(0.5, -0.2, 1.0);
-        let sources: Vec<(DVec3, f64)> = (0..10)
-            .map(|i| (c + DVec3::splat(0.1 * i as f64), 1.0 + 0.3 * i as f64))
+        let panels: Vec<(DVec3, f64, f64, DVec3)> = (0..10)
+            .map(|i| {
+                let t = i as f64 * 0.21;
+                let pos = c + DVec3::new(t.sin(), t.cos(), (2.0 * t).sin()) * 0.1;
+                let normal = DVec3::new(t.cos(), -t.sin(), (t + 0.3).sin()).normalize();
+                (pos, 1.0 + 0.3 * i as f64, 0.5 + 0.2 * i as f64, normal)
+            })
             .collect();
-        let monolith = ShExpansion::from_sources(c, &sources);
-        let (a_src, b_src) = sources.split_at(sources.len() / 2);
-        let ea = ShExpansion::from_sources(c, a_src);
-        let eb = ShExpansion::from_sources(c, b_src);
-        let mut merged = ea;
-        merged.fold(&eb);
+        let build = |subset: &[(DVec3, f64, f64, DVec3)]| {
+            let mut exp = ShExpansion {
+                center: c,
+                ..ShExpansion::default()
+            };
+            for &(pos, q, f, nrm) in subset {
+                exp.accumulate(pos, q);
+                exp.accumulate_dipole(pos, f, nrm);
+            }
+            exp
+        };
+        let monolith = build(&panels);
+        let (left, right) = panels.split_at(panels.len() / 2);
+        let mut merged = build(left);
+        merged.fold(&build(right));
         for (&got, &want) in merged.coeffs.iter().zip(&monolith.coeffs) {
-            assert!((got - want).norm() < 1e-13);
+            assert!((got - want).norm() < 1e-13, "single-layer fold mismatch");
+        }
+        for (&got, &want) in merged.double_coeffs.iter().zip(&monolith.double_coeffs) {
+            assert!((got - want).norm() < 1e-13, "double-layer fold mismatch");
         }
     }
 
