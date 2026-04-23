@@ -107,23 +107,30 @@ impl Surface {
         check_closed_orientable(&faces)?;
 
         let geom = FaceGeoms::compute(&verts, &faces);
-        for (i, ((&area, &c), &n)) in geom
-            .areas
-            .iter()
-            .zip(&geom.centroids)
-            .zip(&geom.normals)
-            .enumerate()
-        {
+        for (i, &area) in geom.areas.iter().enumerate() {
             if area <= 0.0 || !area.is_finite() {
                 return Err(Error::DegenerateFace { face: i, area });
             }
-            // why: orientation check is meaningful only for surfaces enclosing
-            // the origin; skip it for centroids very close to origin (the
-            // sanity check is weak there) and trust the user otherwise.
-            let dot = c.dot(n);
-            if dot <= 0.0 && c.length_squared() > 1e-12 {
-                return Err(Error::NormalOrientation { face: i, dot });
-            }
+        }
+
+        // Divergence theorem: ∫_∂V x·n dS = 3V for a closed surface with
+        // outward-pointing normals. The aggregate sign is translation-
+        // invariant — a positive value for any closed-orientable mesh at
+        // any position in space, negative only if the winding is inverted.
+        // We use this instead of a per-face centroid·normal check since
+        // the latter only works for origin-centred meshes.
+        let signed_volume_6: f64 = geom
+            .centroids
+            .iter()
+            .zip(&geom.normals)
+            .zip(&geom.areas)
+            .map(|((&c, &n), &a)| c.dot(n) * a)
+            .sum();
+        if signed_volume_6 <= 0.0 {
+            return Err(Error::NormalOrientation {
+                face: 0,
+                dot: signed_volume_6,
+            });
         }
 
         Ok(Self {
