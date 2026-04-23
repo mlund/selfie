@@ -1,4 +1,4 @@
-//! Build the Juffer derivative-BIE block system.
+//! Build the RHS of the Juffer derivative-BIE block system.
 //!
 //! ```text
 //! [ ½I + K₀'     −(ε_out/ε_in) K₀ ] [ f ]   [ φ_coul_in  ]
@@ -14,98 +14,61 @@
 //!   screened Coulomb `φ_yukawa(c_a) = Σ q_i · exp(−κ|c_a − r_i|) /
 //!   (ε_out · |c_a − r_i|)`; top RHS is zero.
 //!
-//! Top row uses G_0 (Laplace interior — κ-independent); bottom row uses
-//! G_κ (screened PB exterior). Reference: Juffer et al., *J. Comput.
-//! Phys.* 97 (1991) 144–171, https://doi.org/10.1016/0021-9991(91)90043-K.
+//! The block matrix itself is applied matrix-free by
+//! [`crate::solver::operator::BemOperator`].
+//!
+//! Reference: Juffer et al., *J. Comput. Phys.* 97 (1991) 144–171,
+//! https://doi.org/10.1016/0021-9991(91)90043-K.
 
 use crate::geometry::Surface;
-use crate::solver::panel_integrals;
 use crate::units::{ChargeSide, Dielectric};
-use faer::Mat;
 use glam::DVec3;
-use rayon::prelude::*;
 
-pub fn build_block_system(
+pub(super) fn build_rhs(
     surface: &Surface,
     media: Dielectric,
     side: ChargeSide,
     charge_positions: &[[f64; 3]],
     charge_values: &[f64],
-) -> (Mat<f64>, Vec<f64>) {
+) -> Vec<f64> {
     let geom = surface.geom_internal();
     let n = geom.len();
-    let size = 2 * n;
+    let mut rhs = vec![0.0_f64; 2 * n];
 
-    let eps_ratio = media.eps_out / media.eps_in;
-    let kappa = media.kappa;
-
-    // why: we build the matrix in a flat row-major `Vec<f64>` because the
-    // outer a-loop is embarrassingly parallel at the row level (each `a`
-    // writes a disjoint top row and bottom row) while `faer::Mat` is
-    // column-major and doesn't expose a clean parallel-row mutation API.
-    // Converting to `faer::Mat` once at the end costs an O(size²) memcpy,
-    // negligible next to the O(size²) kernel work.
-    let mut flat = vec![0.0_f64; size * size];
-    let (flat_top, flat_bot) = flat.split_at_mut(n * size);
-
-    flat_top
-        .par_chunks_mut(size)
-        .zip(flat_bot.par_chunks_mut(size))
-        .enumerate()
-        .for_each(|(a, (top_row, bot_row))| {
-            let ca = geom.centroids[a];
-            for b in 0..n {
-                let nb = geom.normals[b];
-                let ab = geom.areas[b];
-                let tri = geom.tris[b];
-
-                // why: top block needs G_0 kernels (Laplace interior),
-                // bottom block needs G_κ kernels (screened PB exterior).
-                // Self-panel K₀' and K_κ' PVs both vanish for flat
-                // centroid-collocation — same planar-displacement argument.
-                let (k0, k0p, kk, kkp) = if a == b {
-                    (
-                        panel_integrals::k_self(tri, ca, 0.0),
-                        0.0,
-                        panel_integrals::k_self(tri, ca, kappa),
-                        0.0,
-                    )
-                } else {
-                    let (k0, k0p) = panel_integrals::k_and_kprime_off(ca, tri, nb, ab, 0.0);
-                    let (kk, kkp) = panel_integrals::k_and_kprime_off(ca, tri, nb, ab, kappa);
-                    (k0, k0p, kk, kkp)
-                };
-
-                let half_i = if a == b { 0.5 } else { 0.0 };
-                top_row[b] = half_i + k0p;
-                top_row[n + b] = -eps_ratio * k0;
-                bot_row[b] = half_i - kkp;
-                bot_row[n + b] = kk;
-            }
-        });
-
-    // Flat row-major → faer column-major.
-    let mat = Mat::<f64>::from_fn(size, size, |i, j| flat[i * size + j]);
-
-    // RHS: whichever block matches the charge side.
-    let mut rhs = vec![0.0_f64; size];
-    let (rhs_offset, rhs_eps, rhs_kappa) = match side {
-        // Interior sources: top block (indices 0..n), Laplace Coulomb
-        // with interior dielectric, no salt (interior is never screened).
+    let (offset, eps_source, kappa_source) = match side {
+        // Interior is never screened — κ applies only to the exterior
+        // solvent. Top block receives the Laplace Coulomb potential.
         ChargeSide::Interior => (0, media.eps_in, 0.0),
-        // Exterior sources: bottom block (indices n..2n), screened
-        // Coulomb with exterior dielectric and user-specified κ.
-        ChargeSide::Exterior => (n, media.eps_out, kappa),
+        // Exterior sources: bottom block, screened Coulomb at the
+        // user-specified ionic strength.
+        ChargeSide::Exterior => (n, media.eps_out, media.kappa),
     };
-    for (a, out) in rhs.iter_mut().skip(rhs_offset).take(n).enumerate() {
-        let ca = geom.centroids[a];
-        let mut phi = 0.0;
-        for (pos, &q) in charge_positions.iter().zip(charge_values.iter()) {
-            let dist = (ca - DVec3::from(*pos)).length();
-            phi += q * (-rhs_kappa * dist).exp() / (rhs_eps * dist);
+
+    // why: Interior RHS is always κ=0 (interior never screens). Split
+    // the Coulomb vs Yukawa branch out of the per-(a, q) inner loop
+    // so ~M×N exp() evaluations vanish whenever sources are interior
+    // or salt-free.
+    if kappa_source == 0.0 {
+        for (a, out) in rhs.iter_mut().skip(offset).take(n).enumerate() {
+            let ca = geom.centroids[a];
+            let mut phi = 0.0;
+            for (pos, &q) in charge_positions.iter().zip(charge_values.iter()) {
+                let dist = (ca - DVec3::from(*pos)).length();
+                phi += q / (eps_source * dist);
+            }
+            *out = phi;
         }
-        *out = phi;
+    } else {
+        for (a, out) in rhs.iter_mut().skip(offset).take(n).enumerate() {
+            let ca = geom.centroids[a];
+            let mut phi = 0.0;
+            for (pos, &q) in charge_positions.iter().zip(charge_values.iter()) {
+                let dist = (ca - DVec3::from(*pos)).length();
+                phi += q * (-kappa_source * dist).exp() / (eps_source * dist);
+            }
+            *out = phi;
+        }
     }
 
-    (mat, rhs)
+    rhs
 }

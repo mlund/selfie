@@ -42,12 +42,27 @@ pub fn k_and_kprime_off(
 ) -> (f64, f64) {
     let mut acc_k = 0.0;
     let mut acc_kp = 0.0;
-    for p in gauss3_points(tri) {
-        let d = observer - p;
-        let r = d.length();
-        let exp_kr = (-kappa * r).exp();
-        acc_k += exp_kr / r;
-        acc_kp += kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+    // why: at κ = 0 the Yukawa factors `exp(−κr)` and `κr + 1` are
+    // identically 1, so three `exp()` calls per off-diagonal entry are
+    // pure waste. The Laplace block of the Juffer system is always
+    // κ = 0, which is ~half of the kernel work in a salt solve and
+    // *all* of it in a salt-free solve. Profiling `libm::exp` was
+    // ~39 % of wall time before this branch was added.
+    if kappa == 0.0 {
+        for p in gauss3_points(tri) {
+            let d = observer - p;
+            let r = d.length();
+            acc_k += 1.0 / r;
+            acc_kp += d.dot(nb) / (r * r * r);
+        }
+    } else {
+        for p in gauss3_points(tri) {
+            let d = observer - p;
+            let r = d.length();
+            let exp_kr = (-kappa * r).exp();
+            acc_k += exp_kr / r;
+            acc_kp += kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+        }
     }
     let s = ab / (3.0 * FOUR_PI);
     (acc_k * s, acc_kp * s)

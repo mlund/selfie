@@ -4,7 +4,7 @@
 //! details, and the `hexasphere` adapter are hidden behind it.
 
 mod icosphere;
-mod panel;
+pub(crate) mod panel;
 
 use crate::error::{Error, Result};
 use crate::units::ChargeSide;

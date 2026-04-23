@@ -5,7 +5,9 @@
 //! crate-internal.
 
 mod assembly;
-mod linalg;
+mod gmres;
+mod kernel;
+mod operator;
 mod panel_integrals;
 
 use crate::error::{Error, Result};
@@ -44,8 +46,9 @@ impl<'s> BemSolution<'s> {
     ///
     /// # Errors
     /// Returns [`Error::ChargeLenMismatch`] if the input arrays have
-    /// different lengths, or [`Error::SolveFailed`] if the LU produces a
-    /// non-finite solution (ill-conditioned system).
+    /// different lengths, or [`Error::SolveFailed`] if GMRES fails to
+    /// reach the convergence tolerance within its iteration budget or
+    /// produces a non-finite solution.
     pub fn solve(
         surface: &'s Surface,
         media: Dielectric,
@@ -59,9 +62,13 @@ impl<'s> BemSolution<'s> {
                 values: charge_values.len(),
             });
         }
-        let (a_matrix, rhs) =
-            assembly::build_block_system(surface, media, side, charge_positions, charge_values);
-        let mut f = linalg::solve_dense(a_matrix, rhs)?;
+        let rhs = assembly::build_rhs(surface, media, side, charge_positions, charge_values);
+        let op = operator::BemOperator {
+            geom: surface.geom_internal(),
+            eps_ratio: media.eps_out / media.eps_in,
+            kappa: media.kappa,
+        };
+        let mut f = gmres::solve(op, rhs)?;
 
         // why: block ordering in assembly is [f; h] (top = potential,
         // bottom = normal derivative). split_off moves ownership of the

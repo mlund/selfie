@@ -10,7 +10,8 @@ default = []
 validation = []
 
 [dependencies]
-faer = "0.22"
+faer = "0.24"
+faer_gmres = "0.5"
 glam = "0.32"
 hexasphere = "18.0"
 log = "0.4.29"
