@@ -1,37 +1,34 @@
-// why: entire treecode sub-module is Stage-3a scaffolding — the
-// accuracy gap from missing double-layer far-field means `apply` in
-// `operator.rs` is still direct O(N²). Lands without a call site in
-// production so the linter sees it as dead; `#[cfg(test)]` exercises
-// it fully via the `apply_bem_operator` cross-check.
+// why: several support methods (`apply`, `traverse`,
+// `build_expansions`) exist only for cross-checking the multipole +
+// octree plumbing under `#[cfg(test)]`; the cartesian `Expansion`
+// also carries unused Laplace evaluators that will disappear once
+// Yukawa migrates to SH. Allow rather than individually gate each.
 #![allow(dead_code)]
 
-//! Barnes-Hut treecode scaffolding for an eventual O(N log N)
-//! `BemOperator::apply`. **Not wired into `apply` today** — see the
-//! module doc in `src/solver/operator.rs` for why (Taylor-order-2
-//! drops the double-layer far-field, which cost ~2 % relative on
-//! matrix entries and broke Kirkwood's 1 % acceptance gate).
-//!
-//! Shape once Stage 3b lands:
+//! Barnes-Hut treecode that drives [`BemOperator::apply`]. Two
+//! independent walks share one octree: the Laplace walk uses the
+//! P = 6 spherical-harmonic expansion in [`solid_harmonic`] at a
+//! loose MAC, the Yukawa walk uses the cartesian Taylor-order-2
+//! expansion in [`multipole`] at a tighter MAC (its accuracy ceiling
+//! limits MAC widening — see `solver::operator`).
 //!
 //! ```text
 //! top[a] = ½ f_a + Σ_b K'₀(a,b) f_b − ε_ratio · Σ_b K₀(a,b) h_b
 //! bot[a] = ½ f_a − Σ_b K'_κ(a,b) f_b + Σ_b K_κ(a,b) h_b
 //! ```
 //!
-//! Stage 3a (this commit) validates the full-apply plumbing against
-//! direct summation inside `#[cfg(test)]`; Stage 3b will add dipole
-//! multipole moments (`D_α`, `M_αβ`) so the double-layer far-field is
-//! handled and the matvec becomes wire-ready for production.
-//!
-//! A point-source entry [`PointTreecode::apply`] is kept test-only
-//! as a cross-check harness for the octree + multipole plumbing.
+//! Near-field pairs fall through to the panel-integrated quadratures
+//! in [`crate::solver::kernel`]; far-field clusters are evaluated via
+//! the multipole expansions. A point-source [`PointTreecode::apply`]
+//! entry is kept test-only as a cross-check harness against direct
+//! summation.
 
 mod multipole;
 mod octree;
 mod solid_harmonic;
 
 use crate::geometry::panel::FaceGeoms;
-use crate::solver::kernel::block_entries;
+use crate::solver::kernel::{block_entries_laplace, block_entries_yukawa};
 #[cfg(test)]
 use crate::solver::panel_integrals::FOUR_PI;
 #[cfg(test)]
@@ -48,36 +45,58 @@ use solid_harmonic::ShExpansion;
 // theoretical worst case, reached only on pathological meshes.
 const TRAVERSE_STACK_CAPACITY: usize = 8 * 24;
 
-/// Point-source treecode over face centroids. A single octree + set
-/// of Taylor moments drives either the Laplace or the Yukawa matvec
-/// depending on `kappa` at call time — the moments are kernel-
-/// agnostic (they're just `Σ q_i · (s_i − c)^⊗k`).
+/// Point-source treecode over face centroids. Single octree but two
+/// Barnes-Hut MAC thresholds: a loose one for the Laplace kernels
+/// (driven by the `P = 6` SH expansion, `θ^7` error envelope) and a
+/// tighter one for the Yukawa kernels (driven by the cartesian
+/// Taylor-order-2 expansion, `θ²` error envelope). Two independent
+/// traversals share the tree topology but test their own MAC at each
+/// internal node, so the Laplace walk sees far more far-field
+/// acceptance and correspondingly fewer near-field pair evaluations.
 #[derive(Debug)]
 pub(super) struct PointTreecode<'g> {
     geom: &'g FaceGeoms,
     tree: Tree,
-    theta: f64,
+    theta_laplace: f64,
+    theta_yukawa: f64,
 }
 
 impl<'g> PointTreecode<'g> {
-    /// Build the tree. `theta` is the Barnes-Hut MAC parameter
-    /// (bounding-sphere radius over distance); `n_crit` is the max
-    /// panels per leaf.
-    pub(super) fn new(geom: &'g FaceGeoms, theta: f64, n_crit: usize) -> Self {
+    /// Build the tree. `theta_laplace` / `theta_yukawa` are the two
+    /// Barnes-Hut MAC parameters (bounding-sphere radius over
+    /// distance); `n_crit` is the max panels per leaf.
+    pub(super) fn new(
+        geom: &'g FaceGeoms,
+        theta_laplace: f64,
+        theta_yukawa: f64,
+        n_crit: usize,
+    ) -> Self {
         let tree = Tree::new(&geom.centroids, n_crit);
-        Self { geom, tree, theta }
+        Self {
+            geom,
+            tree,
+            theta_laplace,
+            theta_yukawa,
+        }
     }
 
     /// Evaluate `Σ_{b ≠ a} q_b · G(c_a, c_b)` at every centroid, with
     /// `G = G₀` when `kappa == 0` and `G = G_κ` otherwise.
     /// Production callers want [`Self::apply_bem_operator`]; this
     /// pure-point-source entry stays as a cross-check target for the
-    /// octree + multipole plumbing.
+    /// octree + multipole plumbing. The MAC parameter picked matches
+    /// the kernel: Laplace uses `theta_laplace`, Yukawa uses
+    /// `theta_yukawa`.
     #[cfg(test)]
     pub(super) fn apply(&self, q: &[f64], kappa: f64) -> Vec<f64> {
         debug_assert_eq!(q.len(), self.geom.len());
         debug_assert!(kappa >= 0.0, "kappa must be non-negative");
         let expansions = self.build_expansions(q);
+        let theta = if kappa == 0.0 {
+            self.theta_laplace
+        } else {
+            self.theta_yukawa
+        };
         // why: `map_init` gives each rayon worker its own scratch
         // stack, reused across all target panels that worker handles.
         // Replaces a per-target `Vec::with_capacity(...)` that would
@@ -88,7 +107,7 @@ impl<'g> PointTreecode<'g> {
                 || Vec::<usize>::with_capacity(TRAVERSE_STACK_CAPACITY),
                 |stack, a| {
                     stack.clear();
-                    self.traverse(self.geom.centroids[a], q, kappa, &expansions, stack)
+                    self.traverse(self.geom.centroids[a], q, kappa, theta, &expansions, stack)
                 },
             )
             .collect()
@@ -103,12 +122,13 @@ impl<'g> PointTreecode<'g> {
     /// bot[a] = ½ f_a − Σ_b K'_κ(a,b) f_b + Σ_b K_κ(a,b) h_b
     /// ```
     ///
-    /// Near-field pairs use the panel-integrated `block_entries` kernel
-    /// (exact within quadrature order) for all four kernel flavours.
-    /// Far-field clusters use the cartesian Taylor multipole: the
-    /// single-layer moments (built from `area·h` weights) drive the
-    /// `K·h` sums, and the order-1 double-layer moments (built from
-    /// `area·f·n` weights) drive the `K'·f` sums.
+    /// Runs two independent tree walks per target: the Laplace walk
+    /// at `theta_laplace` drives the top block (and, when `κ = 0`,
+    /// the bottom block too via Yukawa ≡ Laplace); the Yukawa walk
+    /// at `theta_yukawa` drives the bottom block when screening is
+    /// active. Near-field uses the panel-integrated quadratures;
+    /// far-field uses the SH Laplace expansion + cartesian Yukawa
+    /// expansion respectively.
     pub(super) fn apply_bem_operator(
         &self,
         x_f: &[f64],
@@ -121,13 +141,6 @@ impl<'g> PointTreecode<'g> {
         debug_assert_eq!(x_h.len(), n);
         debug_assert!(kappa >= 0.0, "kappa must be non-negative");
 
-        // why: `block_entries`'s panel-integrated kernels include area
-        // implicitly (as `∫_{T_b} ... dS'`), so the point-source
-        // multipole replacement must multiply density by area. The
-        // spherical-harmonic store now carries both Laplace single-
-        // and double-layer moments (accuracy `(ε/R)^(P+1)` at
-        // `P = 6`); the cartesian store is only built when `κ > 0` to
-        // serve the Yukawa pair, and is empty otherwise.
         let (sh_exps, cart_exps) = self.build_bem_expansions(x_f, x_h, kappa);
 
         (0..n)
@@ -135,10 +148,20 @@ impl<'g> PointTreecode<'g> {
             .map_init(
                 || Vec::<usize>::with_capacity(TRAVERSE_STACK_CAPACITY),
                 |stack, a| {
+                    let half_f = 0.5 * x_f[a];
                     stack.clear();
-                    self.traverse_bem(
-                        a, x_f, x_h, kappa, eps_ratio, &sh_exps, &cart_exps, stack,
-                    )
+                    let (k0_h, k0p_f) = self.traverse_laplace(a, x_f, x_h, &sh_exps, stack);
+                    let top = half_f + k0p_f - eps_ratio * k0_h;
+                    let bot = if kappa == 0.0 {
+                        // κ = 0: Yukawa ≡ Laplace, reuse the sums.
+                        half_f + k0_h - k0p_f
+                    } else {
+                        stack.clear();
+                        let (kk_h, kkp_f) =
+                            self.traverse_yukawa(a, x_f, x_h, kappa, &cart_exps, stack);
+                        half_f + kk_h - kkp_f
+                    };
+                    (top, bot)
                 },
             )
             .unzip()
@@ -183,65 +206,93 @@ impl<'g> PointTreecode<'g> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn traverse_bem(
+    /// Laplace-only traversal at `theta_laplace`. Returns the pair
+    /// `(Σ_b K_0(a,b) · h_b, Σ_b K'_0(a,b) · f_b)` — the caller
+    /// composes these into the `top` Juffer row (and, at `κ = 0`,
+    /// the `bot` row too).
+    ///
+    /// Near-field uses the Laplace-only [`block_entries_laplace`],
+    /// far-field uses [`ShExpansion::evaluate_laplace_pair`] which
+    /// returns both single and double in one irregular-harmonic pass.
+    fn traverse_laplace(
         &self,
         target_a: usize,
         x_f: &[f64],
         x_h: &[f64],
-        kappa: f64,
-        eps_ratio: f64,
         sh_exps: &[ShExpansion],
-        cart_exps: &[Expansion],
         stack: &mut Vec<usize>,
     ) -> (f64, f64) {
         let target = self.geom.centroids[target_a];
-        // ½I self identity; both block rows see `f_a` on their diagonal.
-        let mut top = 0.5 * x_f[target_a];
-        let mut bot = 0.5 * x_f[target_a];
-
+        let mut k0_sum = 0.0;
+        let mut k0p_sum = 0.0;
         stack.push(0);
         while let Some(idx) = stack.pop() {
             let node = &self.tree.nodes[idx];
             if node.is_leaf() {
-                // Panel-integrated near-field via `block_entries`. The
-                // self-panel (target_a, target_a) is encountered here
-                // because the tree partitions all panels; its k0p/kkp
-                // are zero for flat centroid collocation so the f-term
-                // contributes nothing beyond the ½I already added.
                 for &pid in &node.panel_ids {
                     let b = pid as usize;
-                    let (k0, k0p, kk, kkp) = block_entries(self.geom, target_a, b, kappa);
-                    top += k0p.mul_add(x_f[b], -eps_ratio * k0 * x_h[b]);
-                    bot += (-kkp).mul_add(x_f[b], kk * x_h[b]);
+                    let (k0, k0p) = block_entries_laplace(self.geom, target_a, b);
+                    k0_sum += k0 * x_h[b];
+                    k0p_sum += k0p * x_f[b];
                 }
                 continue;
             }
             let dist = (target - node.bbox.center).length();
-            if node.bbox.bounding_radius() < self.theta * dist {
-                // Laplace pair `(k0, k0p)` through the spherical-
-                // harmonic store sharing one `irregular_solid_harmonic`
-                // table. Yukawa stays on the cartesian store until
-                // its SH migration (deferred — the Bessel-coupling
-                // M2M is non-trivial; the Laplace formula does not
-                // carry over because ρ changes under translation).
+            if node.bbox.bounding_radius() < self.theta_laplace * dist {
                 let (k0_far, k0p_far) = sh_exps[idx].evaluate_laplace_pair(target);
-                top += k0p_far - eps_ratio * k0_far;
-                if kappa == 0.0 {
-                    // κ = 0: Yukawa ≡ Laplace, skip the second pair.
-                    bot += k0_far - k0p_far;
-                } else {
-                    let (kk_far, kkp_far) =
-                        cart_exps[idx].evaluate_yukawa_pair(target, kappa);
-                    bot += kk_far - kkp_far;
-                }
+                k0_sum += k0_far;
+                k0p_sum += k0p_far;
             } else {
                 for &ci in &node.children {
                     stack.push(ci as usize);
                 }
             }
         }
-        (top, bot)
+        (k0_sum, k0p_sum)
+    }
+
+    /// Yukawa-only traversal at `theta_yukawa`. Returns the pair
+    /// `(Σ_b K_κ(a,b) · h_b, Σ_b K'_κ(a,b) · f_b)`; the caller
+    /// composes these into the `bot` Juffer row. Debug-asserts
+    /// `κ > 0`; at `κ = 0` the caller reuses the Laplace sums via the
+    /// `K_κ ≡ K_0` identity.
+    fn traverse_yukawa(
+        &self,
+        target_a: usize,
+        x_f: &[f64],
+        x_h: &[f64],
+        kappa: f64,
+        cart_exps: &[Expansion],
+        stack: &mut Vec<usize>,
+    ) -> (f64, f64) {
+        debug_assert!(kappa > 0.0, "traverse_yukawa requires κ > 0");
+        let target = self.geom.centroids[target_a];
+        let mut kk_sum = 0.0;
+        let mut kkp_sum = 0.0;
+        stack.push(0);
+        while let Some(idx) = stack.pop() {
+            let node = &self.tree.nodes[idx];
+            if node.is_leaf() {
+                for &pid in &node.panel_ids {
+                    let b = pid as usize;
+                    let (kk, kkp) = block_entries_yukawa(self.geom, target_a, b, kappa);
+                    kk_sum += kk * x_h[b];
+                    kkp_sum += kkp * x_f[b];
+                }
+                continue;
+            }
+            let dist = (target - node.bbox.center).length();
+            if node.bbox.bounding_radius() < self.theta_yukawa * dist {
+                let (kk_far, kkp_far) = cart_exps[idx].evaluate_yukawa_pair(target, kappa);
+                kk_sum += kk_far;
+                kkp_sum += kkp_far;
+            } else {
+                for &ci in &node.children {
+                    stack.push(ci as usize);
+                }
+            }
+        }
+        (kk_sum, kkp_sum)
     }
 
     /// Point-source single-layer upward sweep. Test-only; production
@@ -341,6 +392,7 @@ impl<'g> PointTreecode<'g> {
         target: DVec3,
         q: &[f64],
         kappa: f64,
+        theta: f64,
         exps: &[Expansion],
         stack: &mut Vec<usize>,
     ) -> f64 {
@@ -378,7 +430,7 @@ impl<'g> PointTreecode<'g> {
             // full lysozyme solve was measured at tens of millions
             // of wasted `sqrt` calls.
             let dist = (target - node.bbox.center).length();
-            if node.bbox.bounding_radius() < self.theta * dist {
+            if node.bbox.bounding_radius() < theta * dist {
                 acc += if kappa == 0.0 {
                     exps[idx].evaluate_laplace(target)
                 } else {
@@ -398,6 +450,7 @@ impl<'g> PointTreecode<'g> {
 mod tests {
     use super::*;
     use crate::Surface;
+    use crate::solver::kernel::block_entries;
 
     /// Hand-rolled N² summation for cross-validation. `kappa == 0`
     /// gives the Laplace kernel, `> 0` gives Yukawa.
@@ -439,7 +492,7 @@ mod tests {
         // expansion order later if production meshes disagree.
         let surface = Surface::icosphere(10.0, 3);
         let geom = surface.geom_internal();
-        let treecode = PointTreecode::new(geom, 0.5, 8);
+        let treecode = PointTreecode::new(geom, 0.5, 0.5, 8);
 
         let n = geom.len();
         let smooth_rhs: Vec<Vec<f64>> = vec![
@@ -478,7 +531,7 @@ mod tests {
         // bug (missed panel, double-count, etc.).
         let surface = Surface::icosphere(5.0, 2);
         let geom = surface.geom_internal();
-        let treecode = PointTreecode::new(geom, 0.0, 4);
+        let treecode = PointTreecode::new(geom, 0.0, 0.0, 4);
         let n = geom.len();
         let q: Vec<f64> = (0..n).map(|i| 1.0 + 0.1 * i as f64).collect();
         let got = treecode.apply(&q, 0.0);
@@ -498,7 +551,7 @@ mod tests {
         // answer (the code path is split but the math is identical).
         let surface = Surface::icosphere(5.0, 2);
         let geom = surface.geom_internal();
-        let treecode = PointTreecode::new(geom, 0.3, 4);
+        let treecode = PointTreecode::new(geom, 0.3, 0.3, 4);
         let n = geom.len();
         let q: Vec<f64> = (0..n).map(|i| 1.0 + 0.1 * i as f64).collect();
         let laplace = treecode.apply(&q, 0.0);
@@ -519,7 +572,7 @@ mod tests {
         let surface = Surface::icosphere(10.0, 3);
         let geom = surface.geom_internal();
         let kappa = 0.125;
-        let treecode = PointTreecode::new(geom, 0.5, 8);
+        let treecode = PointTreecode::new(geom, 0.5, 0.5, 8);
 
         let n = geom.len();
         let q: Vec<f64> = (0..n)
@@ -585,7 +638,7 @@ mod tests {
         let surface = Surface::icosphere(5.0, 2);
         let geom = surface.geom_internal();
         let n = geom.len();
-        let treecode = PointTreecode::new(geom, 0.5, n + 1);
+        let treecode = PointTreecode::new(geom, 0.5, 0.5, n + 1);
         let x_f: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin()).collect();
         let x_h: Vec<f64> = (0..n).map(|i| (i as f64 * 0.17).cos()).collect();
         let kappa = 0.125;
@@ -614,7 +667,7 @@ mod tests {
         // sign / scaling bugs in evaluate_yukawa.
         let surface = Surface::icosphere(10.0, 2);
         let geom = surface.geom_internal();
-        let treecode = PointTreecode::new(geom, 0.4, 8);
+        let treecode = PointTreecode::new(geom, 0.4, 0.4, 8);
         let n = geom.len();
         let q = vec![1.0; n];
         let laplace = treecode.apply(&q, 0.0);

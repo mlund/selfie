@@ -25,16 +25,19 @@ use std::time::Instant;
 static APPLY_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FIRST_APPLY: OnceLock<Instant> = OnceLock::new();
 
-// why: Barnes-Hut MAC parameter. Laplace single- and double-layer
-// kernels run on the `P = 6` spherical-harmonic expansion in
-// `solver::treecode::solid_harmonic` — error envelope `θ^7`, so
-// they're accurate to ~10⁻³ per far cluster even at `θ = 0.6`.
-// The Yukawa path still uses the Taylor-order-2 cartesian moments
-// in `solver::treecode::multipole`, with error `~θ²`; at `θ = 0.6`
-// that's ~0.36, and pushing to `θ = 0.7` sends Kirkwood+salt and
-// the exterior reciprocity gate past their 1 % tolerance. Widen
-// once Yukawa migrates to the SH basis.
-const MAC_THETA: f64 = 0.6;
+// why: asymmetric Barnes-Hut MAC — the two kernels have very
+// different expansion orders and tolerate very different θ. Laplace
+// runs on the `P = 6` SH expansion in `treecode::solid_harmonic`
+// (error envelope `θ^7`, ~10⁻⁵ at θ = 0.85); Yukawa still runs on
+// the cartesian Taylor-order-2 in `treecode::multipole` (error
+// `~θ²`, bounded at 0.6 by the Kirkwood+salt / exterior-reciprocity
+// 1 % gate). Two separate tree walks share the same octree but test
+// each kernel's MAC independently, so Laplace sees far more far-
+// field acceptance and correspondingly fewer near-field pair
+// integrations — the dominant solver cost. Widen `MAC_THETA_YUKAWA`
+// once Yukawa migrates to an SH basis.
+const MAC_THETA_LAPLACE: f64 = 0.8;
+const MAC_THETA_YUKAWA: f64 = 0.6;
 // Max panels per leaf. Small leaves keep the tree deep enough that
 // MAC passes at shallow levels on cluster-in-cluster geometries like
 // protein SES. Empirically `n_crit = 50` is the sweet spot between
@@ -51,7 +54,7 @@ pub(super) struct BemOperator<'a> {
 
 impl<'a> BemOperator<'a> {
     pub(super) fn new(geom: &'a FaceGeoms, eps_ratio: f64, kappa: f64) -> Self {
-        let tree = PointTreecode::new(geom, MAC_THETA, N_CRIT);
+        let tree = PointTreecode::new(geom, MAC_THETA_LAPLACE, MAC_THETA_YUKAWA, N_CRIT);
         Self {
             geom,
             eps_ratio,
