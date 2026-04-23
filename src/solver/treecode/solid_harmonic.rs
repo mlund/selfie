@@ -201,6 +201,64 @@ impl ShExpansion {
         sum.re / FOUR_PI
     }
 
+    /// Merge `other` into `self`, requiring identical centres. Used by
+    /// the tree's upward sweep when a parent gathers child moments
+    /// already translated to the parent centre via [`Self::shifted_to`].
+    pub(super) fn fold(&mut self, other: &Self) {
+        debug_assert!(
+            (self.center - other.center).length_squared() < 1e-24,
+            "fold only valid at identical centres"
+        );
+        for (a, b) in self.coeffs.iter_mut().zip(&other.coeffs) {
+            *a += b;
+        }
+    }
+
+    /// Translate the expansion to a new centre via the M2M operator:
+    /// ```text
+    /// M'_n^m(c₂) = Σ_{k=0..n} Σ_{j=−k..k} conj(R_k^j(−δ)) · M_{n−k}^{m−j}(c₁)
+    /// ```
+    /// with `δ = c₂ − c₁`, derived from the regular-harmonic addition
+    /// theorem `R_n^m(s − δ) = Σ R_{n−k}^{m−j}(s) · R_k^j(−δ)`.
+    /// `O(P⁴)` complex multiplies per shift.
+    pub(super) fn shifted_to(&self, new_center: DVec3) -> Self {
+        let delta = new_center - self.center;
+        // why: conjugate the shift table up front (49 negations) so the
+        // quadruple inner loop sees a bare complex multiply. Also lets
+        // us fold the `.conj()` out of the hottest path.
+        let r_conj: [c64; NCOEF] = regular_solid_harmonic(-delta).map(|c| c.conj());
+        let mut new_coeffs = [c64::new(0.0, 0.0); NCOEF];
+        for n in 0..=P {
+            let n_sig = n as isize;
+            let row_out = n * n + n;
+            for m in -n_sig..=n_sig {
+                let mut sum = c64::new(0.0, 0.0);
+                for k in 0..=n {
+                    let k_sig = k as isize;
+                    let np = n - k;
+                    let np_sig = np as isize;
+                    // why: the underlying M_{np}^{mp} slot exists only
+                    // for |mp| ≤ np. Clamping j's range up front avoids
+                    // a conditional `continue` in the innermost loop.
+                    let j_lo = (m - np_sig).max(-k_sig);
+                    let j_hi = (m + np_sig).min(k_sig);
+                    let row_k = k * k + k;
+                    let row_np = np * np + np;
+                    for j in j_lo..=j_hi {
+                        let rc = r_conj[row_k.wrapping_add_signed(j)];
+                        let mc = self.coeffs[row_np.wrapping_add_signed(m - j)];
+                        sum += rc * mc;
+                    }
+                }
+                new_coeffs[row_out.wrapping_add_signed(m)] = sum;
+            }
+        }
+        Self {
+            center: new_center,
+            coeffs: new_coeffs,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn from_sources(center: DVec3, sources: &[(DVec3, f64)]) -> Self {
         let mut exp = Self {
@@ -343,6 +401,53 @@ mod tests {
         // gives (ε/R)^7 ≈ (1/80)^7 ≈ 1e-13, but fp roundoff in the
         // 49-term sum floors us around 1e-12).
         assert!(prev < 1e-10, "far-field error too large: {prev:e}");
+    }
+
+    #[test]
+    fn sh_shift_matches_rebuild_from_sources() {
+        // Accumulate at c₁, shift to c₂; compare coefficient-by-
+        // coefficient against an expansion built fresh at c₂. The
+        // M2M operator must preserve moments bit-for-bit up to fp
+        // non-associativity.
+        let c1 = DVec3::new(0.1, 0.2, 0.3);
+        let c2 = DVec3::new(1.0, -0.5, 0.8);
+        let sources: Vec<(DVec3, f64)> = (0..10)
+            .map(|i| {
+                let t = i as f64 * 0.237;
+                (
+                    c1 + DVec3::new(t.sin(), t.cos(), (2.0 * t).sin()) * 0.2,
+                    1.0 + 0.1 * i as f64,
+                )
+            })
+            .collect();
+        let shifted = ShExpansion::from_sources(c1, &sources).shifted_to(c2);
+        let rebuilt = ShExpansion::from_sources(c2, &sources);
+        for (i, (&got, &want)) in shifted.coeffs.iter().zip(&rebuilt.coeffs).enumerate() {
+            let diff = (got - want).norm();
+            let scale = 1.0 + want.norm();
+            assert!(
+                diff < 1e-11 * scale,
+                "coeff {i}: shifted={got:?}, rebuilt={want:?}, diff={diff:e}"
+            );
+        }
+        assert!((shifted.center - c2).length() < 1e-14);
+    }
+
+    #[test]
+    fn sh_fold_matches_single_accumulate() {
+        let c = DVec3::new(0.5, -0.2, 1.0);
+        let sources: Vec<(DVec3, f64)> = (0..10)
+            .map(|i| (c + DVec3::splat(0.1 * i as f64), 1.0 + 0.3 * i as f64))
+            .collect();
+        let monolith = ShExpansion::from_sources(c, &sources);
+        let (a_src, b_src) = sources.split_at(sources.len() / 2);
+        let ea = ShExpansion::from_sources(c, a_src);
+        let eb = ShExpansion::from_sources(c, b_src);
+        let mut merged = ea;
+        merged.fold(&eb);
+        for (&got, &want) in merged.coeffs.iter().zip(&monolith.coeffs) {
+            assert!((got - want).norm() < 1e-13);
+        }
     }
 
     #[test]

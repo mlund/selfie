@@ -39,6 +39,7 @@ use glam::DVec3;
 use multipole::Expansion;
 use octree::Tree;
 use rayon::prelude::*;
+use solid_harmonic::ShExpansion;
 
 // why: traversal stack depth is bounded by the octree's max recursion
 // depth times the branching factor (each internal node can push up to
@@ -122,11 +123,13 @@ impl<'g> PointTreecode<'g> {
 
         // why: `block_entries`'s panel-integrated kernels include area
         // implicitly (as `∫_{T_b} ... dS'`), so the point-source
-        // multipole replacement must multiply density by area. The
-        // upward sweep accumulates BOTH single-layer moments (from
-        // `area·h`) and double-layer moments (from `area·f·n`) in one
-        // pass.
-        let expansions = self.build_bem_expansions(x_f, x_h);
+        // multipole replacement must multiply density by area. Two
+        // expansion stores: the spherical-harmonic single-layer
+        // moments drive the Laplace `K₀·h` sums (accuracy
+        // `(ε/R)^(P+1)` at `P = 6`); the cartesian Taylor-order-2
+        // moments still drive Yukawa + double-layer until stages 1.3
+        // move both onto the spherical-harmonic basis.
+        let (sh_exps, cart_exps) = self.build_bem_expansions(x_f, x_h);
 
         (0..n)
             .into_par_iter()
@@ -134,23 +137,44 @@ impl<'g> PointTreecode<'g> {
                 || Vec::<usize>::with_capacity(TRAVERSE_STACK_CAPACITY),
                 |stack, a| {
                     stack.clear();
-                    self.traverse_bem(a, x_f, x_h, kappa, eps_ratio, &expansions, stack)
+                    self.traverse_bem(
+                        a, x_f, x_h, kappa, eps_ratio, &sh_exps, &cart_exps, stack,
+                    )
                 },
             )
             .unzip()
     }
 
-    /// Build moments carrying both single-layer (from `area·h`) and
-    /// double-layer (from `area·f·n`) contributions in one upward
-    /// sweep of the tree.
-    fn build_bem_expansions(&self, x_f: &[f64], x_h: &[f64]) -> Vec<Expansion> {
+    /// Build BEM moments. Returns `(sh_exps, cart_exps)` where the SH
+    /// store carries the Laplace single-layer moments (from `h · area`)
+    /// and the cartesian store carries Yukawa single-layer + both
+    /// double-layer moments.
+    ///
+    /// why: the two sweeps are fully independent (disjoint output
+    /// buffers, all inputs immutable); `rayon::join` halves the
+    /// build-phase wallclock on multicore machines without any data
+    /// hazards to reason about.
+    fn build_bem_expansions(
+        &self,
+        x_f: &[f64],
+        x_h: &[f64],
+    ) -> (Vec<ShExpansion>, Vec<Expansion>) {
         let geom = self.geom;
-        self.build_expansions_with(|exp, pid| {
-            let s = geom.centroids[pid];
-            let area = geom.areas[pid];
-            exp.accumulate(s, x_h[pid] * area);
-            exp.accumulate_dipole(s, x_f[pid] * area, geom.normals[pid]);
-        })
+        rayon::join(
+            || {
+                self.build_sh_expansions_with(|exp, pid| {
+                    exp.accumulate(geom.centroids[pid], x_h[pid] * geom.areas[pid]);
+                })
+            },
+            || {
+                self.build_expansions_with(|exp, pid| {
+                    let s = geom.centroids[pid];
+                    let area = geom.areas[pid];
+                    exp.accumulate(s, x_h[pid] * area);
+                    exp.accumulate_dipole(s, x_f[pid] * area, geom.normals[pid]);
+                })
+            },
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -161,7 +185,8 @@ impl<'g> PointTreecode<'g> {
         x_h: &[f64],
         kappa: f64,
         eps_ratio: f64,
-        exps: &[Expansion],
+        sh_exps: &[ShExpansion],
+        cart_exps: &[Expansion],
         stack: &mut Vec<usize>,
     ) -> (f64, f64) {
         let target = self.geom.centroids[target_a];
@@ -188,18 +213,20 @@ impl<'g> PointTreecode<'g> {
             }
             let dist = (target - node.bbox.center).length();
             if node.bbox.bounding_radius() < self.theta * dist {
-                // Far-field: single-layer from `h`-moments, double-
-                // layer from `f`-moments. Pair evaluators return
-                // both kernels in one pass — share the distance-power
-                // chain and (for Yukawa) the exp/A/B coefficients.
-                let exp = &exps[idx];
-                let (k0_far, k0p_far) = exp.evaluate_laplace_pair(target);
+                // Laplace single-layer through the spherical-harmonic
+                // moments; the cartesian store supplies the Laplace
+                // double-layer `K'₀` and, when screening is active,
+                // the full Yukawa pair. See module doc on
+                // `solid_harmonic.rs` for the underlying series.
+                let k0_far = sh_exps[idx].evaluate_laplace(target);
+                let k0p_far = cart_exps[idx].evaluate_double_laplace(target);
                 top += k0p_far - eps_ratio * k0_far;
                 if kappa == 0.0 {
                     // κ = 0: Yukawa ≡ Laplace, skip the second pair.
                     bot += k0_far - k0p_far;
                 } else {
-                    let (kk_far, kkp_far) = exp.evaluate_yukawa_pair(target, kappa);
+                    let (kk_far, kkp_far) =
+                        cart_exps[idx].evaluate_yukawa_pair(target, kappa);
                     bot += kk_far - kkp_far;
                 }
             } else {
@@ -219,6 +246,40 @@ impl<'g> PointTreecode<'g> {
         self.build_expansions_with(|exp, pid| {
             exp.accumulate(geom.centroids[pid], q[pid]);
         })
+    }
+
+    /// Spherical-harmonic upward sweep. Same reverse-order post-order
+    /// traversal as [`Self::build_expansions_with`], but over the SH
+    /// coefficient store.
+    fn build_sh_expansions_with<F>(&self, mut leaf_accum: F) -> Vec<ShExpansion>
+    where
+        F: FnMut(&mut ShExpansion, usize),
+    {
+        let mut exps: Vec<ShExpansion> = self
+            .tree
+            .nodes
+            .iter()
+            .map(|node| ShExpansion {
+                center: node.bbox.center,
+                ..ShExpansion::default()
+            })
+            .collect();
+        for i in (0..self.tree.nodes.len()).rev() {
+            let node = &self.tree.nodes[i];
+            if node.is_leaf() {
+                for &pid in &node.panel_ids {
+                    leaf_accum(&mut exps[i], pid as usize);
+                }
+            } else {
+                let parent_center = node.bbox.center;
+                let children = node.children.clone();
+                for ci in children {
+                    let shifted = exps[ci as usize].shifted_to(parent_center);
+                    exps[i].fold(&shifted);
+                }
+            }
+        }
+        exps
     }
 
     /// Upward sweep skeleton shared by every moment-build entry point.
