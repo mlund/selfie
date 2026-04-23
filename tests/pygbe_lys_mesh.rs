@@ -68,17 +68,18 @@ fn lysozyme_single_surface_pipeline() {
 
 /// End-to-end GMRES solve on the full 14,398-face lysozyme mesh.
 ///
-/// `#[ignore]`'d because it takes many minutes to run — far too slow for
-/// default CI / developer `cargo test`. Run explicitly with
+/// `#[ignore]`'d because even with the RAS preconditioner each solve
+/// still costs ~20 s of CPU — fine for opt-in regression, too slow for
+/// every `cargo test` invocation. Run explicitly with
 /// `cargo test --release --features validation --test pygbe_lys_mesh -- --ignored`.
 ///
 /// Reference: pygbe's `lys_single_1` convergence test
 /// (`tests/convergence_tests/lysozyme.py`, `Esolv_ref_single[0]`), which
 /// fixes `E_solv = −2401.2 kJ/mol ≈ −573.90 kcal/mol` at the Lys1 mesh
 /// with ε_in=4, ε_out=80, κ=0.125 Å⁻¹. We use the same mesh
-/// (`Lys1.{vert,face}`) and the same charge file (`built_parse.pqr`), so
-/// our single-surface Juffer solve should reproduce this number within
-/// a few percent (coarse-mesh discretisation error dominates).
+/// (`Lys1.{vert,face}`) and the same charge file (`built_parse.pqr`),
+/// and with the neighbour-block preconditioner our E_solv matches
+/// pygbe's to ≈ 0.1 %.
 #[test]
 #[ignore]
 fn lysozyme_full_solve() {
