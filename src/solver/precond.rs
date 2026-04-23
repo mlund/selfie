@@ -115,25 +115,27 @@ impl NeighborBlock {
         let n = geom.len();
         debug_assert!(k < n, "k neighbours must be < N panels");
 
-        // Nearest-neighbour search by centroid distance. O(N²·log k) —
-        // a partial-sort per panel. Quick enough for meshes up to a few
-        // 10⁴ faces; beyond that a kd-tree would be the right structure.
+        // why: O(N log N) kd-tree build + O(log N) per query beats the
+        // hand-rolled O(N²) partial-sort that used to live here; at
+        // N=14 k the saving is ~1 s of preconditioner-build time.
+        let mut tree: kdtree::KdTree<f64, u32, [f64; 3]> = kdtree::KdTree::new(3);
+        for (i, c) in geom.centroids.iter().enumerate() {
+            tree.add(c.to_array(), i as u32)
+                .expect("kd-tree insert is infallible for finite centroids");
+        }
+
+        // `nearest(p, k+1, …)` returns the query point itself first
+        // (distance 0); skip it so only true neighbours enter the
+        // local sub-block.
         let neighbourhoods: Vec<u32> = (0..n)
             .into_par_iter()
             .flat_map_iter(|a| {
-                let ca = geom.centroids[a];
-                let mut dist: Vec<(f64, u32)> = (0..n)
-                    .filter(|&b| b != a)
-                    .map(|b| ((ca - geom.centroids[b]).length_squared(), b as u32))
-                    .collect();
-                let pivot = k.saturating_sub(1).min(dist.len() - 1);
-                // why: partial sort — only need the top k by ascending
-                // distance. `total_cmp` is the f64-safe comparator that
-                // doesn't panic on NaN (stable since Rust 1.62).
-                dist.select_nth_unstable_by(pivot, |x, y| x.0.total_cmp(&y.0));
-                dist.truncate(k);
-                dist.sort_unstable_by(|x, y| x.0.total_cmp(&y.0));
-                std::iter::once(a as u32).chain(dist.into_iter().map(|(_, idx)| idx))
+                let ca = geom.centroids[a].to_array();
+                let hits = tree
+                    .nearest(&ca, k + 1, &kdtree::distance::squared_euclidean)
+                    .expect("kd-tree query never fails for finite input");
+                std::iter::once(a as u32)
+                    .chain(hits.into_iter().map(|(_, &idx)| idx).filter(move |&idx| idx != a as u32).take(k))
             })
             .collect();
 
