@@ -1,6 +1,6 @@
 //! κ > 0 validation: BEM reaction-field must match the salted Kirkwood
-//! analytical result on a sphere. Physiological target: κ = 1/14 Å⁻¹
-//! (Debye length 14 Å ≈ 50 mM 1:1 salt).
+//! analytical result on a sphere. Physiological target: κ = 1/9 Å⁻¹
+//! (Debye length 9 Å ≈ 115 mM 1:1 salt — near physiological).
 //!
 //! Acceptance at subdivisions = 7 (n_t = 1280): relative error < 1 %.
 
@@ -12,7 +12,7 @@ use common::{A, EPS_IN, EPS_OUT, eval_point, source};
 use selfie::analytical::kirkwood_salt::reaction_field_potential_unit_source as phi_rf_analytical;
 use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 
-const KAPPA: f64 = 1.0 / 14.0;
+const KAPPA: f64 = 1.0 / 9.0;
 
 fn bem_phi_rf(subdivisions: usize, kappa: f64) -> f64 {
     let surface = Surface::icosphere(A, subdivisions);
@@ -25,7 +25,7 @@ fn bem_phi_rf(subdivisions: usize, kappa: f64) -> f64 {
 #[test]
 fn convergence_to_kirkwood_salt_physiological() {
     let reference = phi_rf_analytical(source(), eval_point(), A, EPS_IN, EPS_OUT, KAPPA, 80);
-    eprintln!("Kirkwood+salt φ_rf (κ = 1/14 Å⁻¹) = {reference:.9e}");
+    eprintln!("Kirkwood+salt φ_rf (κ = 1/9 Å⁻¹) = {reference:.9e}");
 
     let mut errors = Vec::new();
     for s in [1usize, 3, 7] {
