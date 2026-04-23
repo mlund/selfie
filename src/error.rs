@@ -38,6 +38,24 @@ pub enum Error {
 
     #[error("linear solve failed: {reason}")]
     SolveFailed { reason: String },
+
+    #[error("I/O reading {path}: {reason}")]
+    Io { path: String, reason: String },
+
+    #[error(
+        "mesh is not a closed orientable 2-manifold: {reason} \
+         (this solver requires a closed surface enclosing a single dielectric volume)"
+    )]
+    NonManifoldMesh { reason: String },
+
+    #[error(
+        "charges straddle the dielectric boundary: {interior} inside, {exterior} outside, {on_surface} on the surface"
+    )]
+    MixedChargeSides {
+        interior: usize,
+        exterior: usize,
+        on_surface: usize,
+    },
 }
 
 pub type Result<T> = core::result::Result<T, Error>;

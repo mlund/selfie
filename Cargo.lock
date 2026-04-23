@@ -1000,6 +1000,7 @@ dependencies = [
  "faer",
  "glam",
  "hexasphere",
+ "log",
  "rayon",
  "thiserror 2.0.18",
 ]

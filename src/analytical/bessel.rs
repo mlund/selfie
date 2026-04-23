@@ -61,7 +61,7 @@ pub fn i_series(x: f64, n_max: usize) -> Vec<f64> {
 /// seeded with `k_0 = exp(−x)/x`, `k_1 = exp(−x)(1 + 1/x)/x`. This direction
 /// is unconditionally stable for `k_n`.
 pub fn k_series(x: f64, n_max: usize) -> Vec<f64> {
-    assert!(x > 0.0, "k_n diverges at x = 0");
+    debug_assert!(x > 0.0, "k_n diverges at x = 0");
     let mut out = Vec::with_capacity(n_max + 1);
     let e = (-x).exp();
     let k0 = e / x;

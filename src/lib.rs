@@ -6,6 +6,7 @@
 
 mod error;
 mod geometry;
+pub mod io;
 mod solver;
 
 // why: units exposes conversion helpers (kcal/mol, kT) that callers reach
