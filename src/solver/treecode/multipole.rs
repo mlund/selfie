@@ -21,7 +21,7 @@
 //! order `P ≥ 6` if GMRES convergence degrades on a heterogeneous
 //! mesh.
 
-use crate::solver::panel_integrals::FOUR_PI;
+use crate::solver::panel_integrals::{FOUR_PI, exp_neg};
 use glam::DVec3;
 
 /// Multipole moments about a cluster centre, carrying both the
@@ -174,7 +174,7 @@ impl Expansion {
         let inv_r5 = inv_r3 * inv_r * inv_r;
 
         let kr = kappa * r_mag;
-        let exp_kr = (-kr).exp();
+        let exp_kr = exp_neg(kr);
         let b_coef = 1.0 + kr;
         let a_coef = b_coef.mul_add(3.0, kr * kr);
 
@@ -525,9 +525,13 @@ mod tests {
         let r = (target - c).length();
         let expected = 5.0 * (-kappa * r).exp() / (FOUR_PI * r);
         let got = exp.evaluate_yukawa(target, kappa);
+        // Tolerance set by `exp_neg`'s 6th-order Taylor (~1e-7 relative),
+        // not by the multipole math (which is exact when the sole
+        // source sits at the centre).
+        let rel = (got - expected).abs() / expected.abs();
         assert!(
-            (got - expected).abs() < 1e-14,
-            "single source: got={got}, expected={expected}"
+            rel < 1e-6,
+            "single source: got={got}, expected={expected}, rel={rel:e}"
         );
     }
 

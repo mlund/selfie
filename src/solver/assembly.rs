@@ -64,7 +64,8 @@ pub(super) fn build_rhs(
             let mut phi = 0.0;
             for (pos, &q) in charge_positions.iter().zip(charge_values.iter()) {
                 let dist = (ca - DVec3::from(*pos)).length();
-                phi += q * (-kappa_source * dist).exp() / (eps_source * dist);
+                phi += q * crate::solver::panel_integrals::exp_neg(kappa_source * dist)
+                    / (eps_source * dist);
             }
             *out = phi;
         }
