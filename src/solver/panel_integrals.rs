@@ -68,6 +68,68 @@ pub fn k_and_kprime_off(
     (acc_k * s, acc_kp * s)
 }
 
+/// 7-point Dunavant quadrature (degree-5) for near-singular off-diagonal
+/// panel integrals. When the observer is within a few panel-widths of
+/// the source triangle, the Yukawa `1/r` kernel varies fast enough that
+/// the 3-point (degree-2) rule in [`k_and_kprime_off`] under-integrates;
+/// the resulting matrix-entry error accumulates into a spectrum wide
+/// enough to push GMRES iteration counts sharply higher on heterogeneous
+/// protein meshes. pygbe uses the same approach via its `K_fine = 19`
+/// parameter; 7-point is enough to recover pygbe-level convergence on
+/// most configurations while keeping the arithmetic cheap.
+pub fn k_and_kprime_near(
+    observer: DVec3,
+    tri: [DVec3; 3],
+    nb: DVec3,
+    ab: f64,
+    kappa: f64,
+) -> (f64, f64) {
+    let mut acc_k = 0.0;
+    let mut acc_kp = 0.0;
+    if kappa == 0.0 {
+        for &(p, w) in &gauss7_points_with_weights(tri) {
+            let d = observer - p;
+            let r = d.length();
+            acc_k += w / r;
+            acc_kp += w * d.dot(nb) / (r * r * r);
+        }
+    } else {
+        for &(p, w) in &gauss7_points_with_weights(tri) {
+            let d = observer - p;
+            let r = d.length();
+            let exp_kr = (-kappa * r).exp();
+            acc_k += w * exp_kr / r;
+            acc_kp += w * kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+        }
+    }
+    let s = ab / FOUR_PI;
+    (acc_k * s, acc_kp * s)
+}
+
+/// Dunavant degree-5 rule on a reference triangle, mapped to world-space
+/// via barycentric interpolation. The 7 barycentric triples + weights
+/// below are the standard Stroud/Dunavant set (weights sum to 1).
+fn gauss7_points_with_weights(tri: [DVec3; 3]) -> [(DVec3, f64); 7] {
+    const T: f64 = 1.0 / 3.0;
+    const W0: f64 = 9.0 / 40.0;
+    const A1: f64 = 0.797_426_985_353_087_3;
+    const B1: f64 = 0.101_286_507_323_456_3;
+    const W1: f64 = 0.125_939_180_544_827_1;
+    const A2: f64 = 0.059_715_871_789_769_8;
+    const B2: f64 = 0.470_142_064_105_115_1;
+    const W2: f64 = 0.132_394_152_788_506_2;
+    let p = |a: f64, b: f64, c: f64| tri[0] * a + tri[1] * b + tri[2] * c;
+    [
+        (p(T, T, T), W0),
+        (p(A1, B1, B1), W1),
+        (p(B1, A1, B1), W1),
+        (p(B1, B1, A1), W1),
+        (p(A2, B2, B2), W2),
+        (p(B2, A2, B2), W2),
+        (p(B2, B2, A2), W2),
+    ]
+}
+
 /// Barycentric 3-point rule suited for smooth integrands on a triangle.
 /// Degree-of-exactness 2.
 pub fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {

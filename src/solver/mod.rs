@@ -9,6 +9,7 @@ mod gmres;
 mod kernel;
 mod operator;
 mod panel_integrals;
+mod precond;
 
 use crate::error::{Error, Result};
 use crate::geometry::Surface;

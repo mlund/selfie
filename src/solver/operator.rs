@@ -12,6 +12,20 @@ use faer::dyn_stack::{MemStack, StackReq};
 use faer::matrix_free::LinOp;
 use faer::{MatMut, MatRef, Par};
 use rayon::prelude::*;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
+
+// why: faer_gmres has no per-iteration hook and `log::info!` is silent
+// unless the caller installs a logger. Count apply() calls and dump
+// their wall-clock spacing to stderr when SELFIE_TRACE is set —
+// straight diagnostic output for "is it iterating or wedged?".
+static APPLY_COUNT: AtomicUsize = AtomicUsize::new(0);
+static FIRST_APPLY: OnceLock<Instant> = OnceLock::new();
+
+fn trace_enabled() -> bool {
+    std::env::var_os("SELFIE_TRACE").is_some()
+}
 
 #[derive(Debug)]
 pub(super) struct BemOperator<'a> {
@@ -34,6 +48,11 @@ impl LinOp<f64> for BemOperator<'_> {
     }
 
     fn apply(&self, mut out: MatMut<f64>, rhs: MatRef<f64>, _par: Par, _stack: &mut MemStack) {
+        let trace = trace_enabled();
+        let t_apply = if trace { Some(Instant::now()) } else { None };
+        if trace {
+            FIRST_APPLY.get_or_init(Instant::now);
+        }
         let n = self.geom.len();
         // why: materialise the column as a flat `&[f64]` once so the
         // parallel closure does slice indexing (no bounds-check per
@@ -68,6 +87,18 @@ impl LinOp<f64> for BemOperator<'_> {
         for (a, &(top, bot)) in y.iter().enumerate() {
             out[(a, 0)] = top;
             out[(n + a, 0)] = bot;
+        }
+
+        if let Some(t) = t_apply {
+            let count = APPLY_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            let since_first = FIRST_APPLY
+                .get()
+                .map_or(0.0, |t0| t0.elapsed().as_secs_f64());
+            eprintln!(
+                "[trace] apply #{count}: {:.2}s  (cumulative {:.1}s)",
+                t.elapsed().as_secs_f64(),
+                since_first,
+            );
         }
     }
 
