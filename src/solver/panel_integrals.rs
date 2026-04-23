@@ -24,7 +24,7 @@
 
 use glam::DVec3;
 
-const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
+pub(super) const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
 
 /// Barycentric 3-point Gauss rule (degree 2) on a triangle, with
 /// explicit weights so the caller scales by `area / (4π)` rather than

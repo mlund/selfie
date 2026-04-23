@@ -10,6 +10,7 @@ mod kernel;
 mod operator;
 mod panel_integrals;
 mod precond;
+mod treecode;
 
 use crate::error::{Error, Result};
 use crate::geometry::Surface;
