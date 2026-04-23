@@ -25,13 +25,16 @@ use std::time::Instant;
 static APPLY_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FIRST_APPLY: OnceLock<Instant> = OnceLock::new();
 
-// why: Barnes-Hut MAC parameter. At `θ = 0.5` the Taylor-order-2
-// single-layer error is ~10⁻¹ per far cluster and the order-1
-// double-layer error is ~θ² ≈ 0.25. Heterogeneous protein meshes
-// can push these past the 1 % acceptance gate of the Kirkwood test;
-// keep `θ` conservative and prefer direct-sum leaves to widen the
-// near-field (tighter MAC means more near pairs → smaller MAC error).
-const MAC_THETA: f64 = 0.4;
+// why: Barnes-Hut MAC parameter. Laplace single- and double-layer
+// kernels run on the `P = 6` spherical-harmonic expansion in
+// `solver::treecode::solid_harmonic` — error envelope `θ^7`, so
+// they're accurate to ~10⁻³ per far cluster even at `θ = 0.6`.
+// The Yukawa path still uses the Taylor-order-2 cartesian moments
+// in `solver::treecode::multipole`, with error `~θ²`; at `θ = 0.6`
+// that's ~0.36, and pushing to `θ = 0.7` sends Kirkwood+salt and
+// the exterior reciprocity gate past their 1 % tolerance. Widen
+// once Yukawa migrates to the SH basis.
+const MAC_THETA: f64 = 0.6;
 // Max panels per leaf. Small leaves keep the tree deep enough that
 // MAC passes at shallow levels on cluster-in-cluster geometries like
 // protein SES. Empirically `n_crit = 50` is the sweet spot between
