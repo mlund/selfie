@@ -7,6 +7,7 @@
 mod error;
 mod geometry;
 pub mod io;
+mod linear_response;
 mod solver;
 
 // why: units exposes conversion helpers (kcal/mol, kT) that callers reach
@@ -23,5 +24,6 @@ pub mod analytical;
 
 pub use error::{Error, Result};
 pub use geometry::Surface;
+pub use linear_response::LinearResponse;
 pub use solver::BemSolution;
 pub use units::{ChargeSide, Dielectric};
