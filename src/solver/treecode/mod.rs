@@ -28,6 +28,7 @@
 
 mod multipole;
 mod octree;
+mod solid_harmonic;
 
 use crate::geometry::panel::FaceGeoms;
 use crate::solver::kernel::block_entries;
