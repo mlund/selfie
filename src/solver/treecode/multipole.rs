@@ -1,29 +1,25 @@
-//! Cartesian Taylor-order-2 multipole for the Laplace kernel
-//! `G₀(r, s) = 1/(4π |r − s|)`.
-//!
-//! Expands around a cluster centre `c`:
+//! Cartesian Taylor-order-2 multipole for the Laplace and Yukawa
+//! kernels. Expands around a cluster centre `c`:
 //!
 //! ```text
-//! G₀(r, c + ε) = G₀(r, c)
-//!              + ε · ∇_s G₀(r, s)|_{s=c}
-//!              + ½ ε ⊗ ε : ∇∇_s G₀(r, s)|_{s=c}
-//!              + O(|ε|³)
+//! G(r, c + ε) ≈ G(r, c)
+//!             + ε · ∇_s G(r, s)|_{s=c}
+//!             + ½ ε ⊗ ε : ∇∇_s G(r, s)|_{s=c}
+//!             + O(|ε|³)
 //! ```
 //!
-//! For N sources `{(s_i, q_i)}` this yields:
+//! The moments — monopole `Q`, dipole `p`, quadrupole `Q_ij` — are
+//! kernel-agnostic sums over sources. Only the per-node evaluation
+//! differs: [`Expansion::evaluate_laplace`] uses derivatives of
+//! `G₀(r, s) = 1/(4π|r − s|)`; [`Expansion::evaluate_yukawa`] uses
+//! derivatives of `G_κ = exp(−κ|r − s|)/(4π|r − s|)`. At κ = 0 the
+//! Yukawa form reduces identically to the Laplace form.
 //!
-//! ```text
-//! Σ q_i · G₀(r, s_i) ≈
-//!     Q · G₀(r, c)                         (monopole)
-//!   + p · (r − c) · /|r − c|³              (dipole)
-//!   + ½ Σ_{i,j} Q_ij · Hᵢⱼ(r − c)         (quadrupole)
-//! ```
-//!
-//! where `Hᵢⱼ(d) = (3 dᵢ dⱼ − δᵢⱼ d²) / |d|⁵` is the double gradient
-//! of `1/|d|`. Relative truncation error is `O((|ε|/|r−c|)³)`; with
-//! MAC `θ = |ε|/|r−c| ≤ 0.5` this is ~10⁻¹. Sufficient for a first
-//! pass; bump to spherical-harmonic order `P ≥ 6` if GMRES
-//! convergence degrades on a heterogeneous mesh.
+//! Relative truncation error is `O((|ε|/|r−c|)³)`; with MAC
+//! `θ = |ε|/|r−c| ≤ 0.5` this is ~10⁻¹. Sufficient for smooth /
+//! positive-dominated source patterns; bump to spherical-harmonic
+//! order `P ≥ 6` if GMRES convergence degrades on a heterogeneous
+//! mesh.
 
 use crate::solver::panel_integrals::FOUR_PI;
 use glam::DVec3;
@@ -74,11 +70,11 @@ impl Expansion {
         self.qzz += q * d.z * d.z;
     }
 
-    /// Evaluate `Σ q_i / (4π |r − s_i|)` at target `r`, using the
+    /// Evaluate `Σ q_i / (4π |r − s_i|)` at target `r` using the
     /// Taylor expansion around `self.center`. Requires
     /// `|r − center| ≥ cluster_bounding_radius` for the truncated
     /// series to converge.
-    pub(super) fn evaluate(&self, r: DVec3) -> f64 {
+    pub(super) fn evaluate_laplace(&self, r: DVec3) -> f64 {
         let d = r - self.center;
         let r2 = d.length_squared();
         let inv_r = r2.sqrt().recip();
@@ -88,21 +84,43 @@ impl Expansion {
         let monopole = self.q * inv_r;
         let dipole = self.p.dot(d) * inv_r3;
 
-        // why: the quadrupole contribution uses the full 3×3 symmetric
-        // tensor; with 6 unique components, write the double-contract
-        // out rather than materialising a Mat3 and trusting inlining.
-        let hxx = 3.0 * d.x * d.x - r2;
-        let hyy = 3.0 * d.y * d.y - r2;
-        let hzz = 3.0 * d.z * d.z - r2;
-        let hxy = 3.0 * d.x * d.y;
-        let hxz = 3.0 * d.x * d.z;
-        let hyz = 3.0 * d.y * d.z;
-        // Qxy, Qxz, Qyz enter twice because the tensor is symmetric.
-        let quadrupole_contract = self.qxx * hxx
-            + self.qyy * hyy
-            + self.qzz * hzz
-            + 2.0 * (self.qxy * hxy + self.qxz * hxz + self.qyz * hyz);
-        let quadrupole = 0.5 * quadrupole_contract * inv_r5;
+        // `q_dd` is the full symmetric contraction `Σ_ij Q_ij d_i d_j`;
+        // off-diagonal entries enter twice because the tensor is
+        // symmetric. `tr_q = Q_xx + Q_yy + Q_zz` folds the δ_ij trace.
+        let q_dd = symmetric_contract(self, d);
+        let tr_q = self.qxx + self.qyy + self.qzz;
+        // H_ij^0 = (3 d_i d_j − r² δ_ij) / r⁵
+        let quadrupole = 0.5 * (3.0 * q_dd - r2 * tr_q) * inv_r5;
+
+        (monopole + dipole + quadrupole) / FOUR_PI
+    }
+
+    /// Evaluate `Σ q_i · exp(−κ|r − s_i|) / (4π |r − s_i|)` at target
+    /// `r`. Same convergence condition as [`Self::evaluate_laplace`];
+    /// reduces to it at κ = 0 (within fp roundoff).
+    pub(super) fn evaluate_yukawa(&self, r: DVec3, kappa: f64) -> f64 {
+        let d = r - self.center;
+        let r2 = d.length_squared();
+        let r_mag = r2.sqrt();
+        let inv_r = r_mag.recip();
+        let inv_r3 = inv_r * inv_r * inv_r;
+        let inv_r5 = inv_r3 * inv_r * inv_r;
+
+        let kr = kappa * r_mag;
+        let exp_kr = (-kr).exp();
+        // Kernel derivatives for Yukawa evaluated at `d`:
+        //   ∂G_κ/∂s_i    = (1+κR)·exp(−κR)·d_i / (4πR³)              =:  B / (4πR³) · d_i
+        //   ∂²G_κ/∂s_i∂s_j = exp(−κR)/(4πR⁵) · [A d_i d_j − B R² δ_ij]
+        // with B = 1 + κR, A = 3 + 3κR + (κR)². At κ=0, B=1 and A=3,
+        // recovering the Laplace Hessian `3 d_i d_j − R² δ_ij`.
+        let b_coef = 1.0 + kr;
+        let a_coef = b_coef.mul_add(3.0, kr * kr);
+
+        let monopole = self.q * exp_kr * inv_r;
+        let dipole = self.p.dot(d) * b_coef * exp_kr * inv_r3;
+        let q_dd = symmetric_contract(self, d);
+        let tr_q = self.qxx + self.qyy + self.qzz;
+        let quadrupole = 0.5 * exp_kr * (a_coef * q_dd - b_coef * r2 * tr_q) * inv_r5;
 
         (monopole + dipole + quadrupole) / FOUR_PI
     }
@@ -165,6 +183,17 @@ impl Expansion {
     }
 }
 
+/// Full symmetric contraction `Σ_{i,j} Q_{ij} d_i d_j` with the
+/// off-diagonal components entering twice (tensor is symmetric).
+/// Free function so both evaluators share identical inlined code.
+#[inline]
+fn symmetric_contract(e: &Expansion, d: DVec3) -> f64 {
+    e.qxx * d.x * d.x
+        + e.qyy * d.y * d.y
+        + e.qzz * d.z * d.z
+        + 2.0 * (e.qxy * d.x * d.y + e.qxz * d.x * d.z + e.qyz * d.y * d.z)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,11 +211,50 @@ mod tests {
         let sources = vec![(c, 5.0)];
         let exp = Expansion::from_sources(c, &sources);
         let target = DVec3::new(10.0, 10.0, 10.0);
-        let got = exp.evaluate(target);
+        let got = exp.evaluate_laplace(target);
         let expected = direct_sum(&sources, target);
         assert!(
             (got - expected).abs() < 1e-14,
             "monopole at centre should be exact: got={got}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn yukawa_at_kappa_zero_matches_laplace() {
+        // With `κ = 0` the Yukawa evaluator reduces mathematically
+        // to the Laplace one (exp(0) = 1, B = 1, A = 3). Enforce
+        // bit-close agreement — the two paths share the same
+        // moment-contraction code, so the only source of drift is
+        // the multiplication by `exp(0)`.
+        let center = DVec3::new(0.1, 0.2, -0.3);
+        let sources: Vec<(DVec3, f64)> = (0..6)
+            .map(|i| (center + DVec3::splat(0.05 * i as f64), 1.0 + 0.2 * i as f64))
+            .collect();
+        let exp = Expansion::from_sources(center, &sources);
+        let target = DVec3::new(5.0, -3.0, 4.0);
+        let laplace = exp.evaluate_laplace(target);
+        let yukawa = exp.evaluate_yukawa(target, 0.0);
+        assert!(
+            (laplace - yukawa).abs() < 1e-15,
+            "κ=0 disagreement: laplace={laplace}, yukawa={yukawa}"
+        );
+    }
+
+    #[test]
+    fn yukawa_single_source_at_center_is_exact() {
+        // A single source at the expansion centre collapses the
+        // dipole and quadrupole to zero; the monopole term alone
+        // reproduces `exp(−κR)/(4πR)` exactly.
+        let c = DVec3::new(1.0, 2.0, 3.0);
+        let kappa = 0.125;
+        let exp = Expansion::from_sources(c, &[(c, 5.0)]);
+        let target = DVec3::new(10.0, 10.0, 10.0);
+        let r = (target - c).length();
+        let expected = 5.0 * (-kappa * r).exp() / (FOUR_PI * r);
+        let got = exp.evaluate_yukawa(target, kappa);
+        assert!(
+            (got - expected).abs() < 1e-14,
+            "single source: got={got}, expected={expected}"
         );
     }
 
@@ -212,7 +280,7 @@ mod tests {
         let mut prev = f64::INFINITY;
         for distance in [5.0_f64, 10.0, 20.0, 40.0] {
             let target = DVec3::new(distance, 0.3 * distance, -0.1 * distance);
-            let approx = exp.evaluate(target);
+            let approx = exp.evaluate_laplace(target);
             let exact = direct_sum(&sources, target);
             let rel = (approx - exact).abs() / exact.abs();
             assert!(
@@ -239,7 +307,10 @@ mod tests {
         let sources: Vec<(DVec3, f64)> = (0..8)
             .map(|i| {
                 let t = i as f64 * 0.3;
-                (c1 + DVec3::new(t.sin(), t.cos(), (2.0 * t).sin()) * 0.1, 1.0)
+                (
+                    c1 + DVec3::new(t.sin(), t.cos(), (2.0 * t).sin()) * 0.1,
+                    1.0,
+                )
             })
             .collect();
         let shifted = Expansion::from_sources(c1, &sources).shifted_to(c2);

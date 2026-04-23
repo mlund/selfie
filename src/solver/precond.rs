@@ -41,12 +41,7 @@ impl BlockJacobi {
                 let a21 = 0.5_f64;
                 let a22 = kk_self;
                 let inv_det = 1.0 / a11.mul_add(a22, -a12 * a21);
-                [
-                    inv_det * a22,
-                    -inv_det * a12,
-                    -inv_det * a21,
-                    inv_det * a11,
-                ]
+                [inv_det * a22, -inv_det * a12, -inv_det * a21, inv_det * a11]
             })
             .collect();
         Self { inv_diag }
@@ -134,8 +129,12 @@ impl NeighborBlock {
                 let hits = tree
                     .nearest(&ca, k + 1, &kdtree::distance::squared_euclidean)
                     .expect("kd-tree query never fails for finite input");
-                std::iter::once(a as u32)
-                    .chain(hits.into_iter().map(|(_, &idx)| idx).filter(move |&idx| idx != a as u32).take(k))
+                std::iter::once(a as u32).chain(
+                    hits.into_iter()
+                        .map(|(_, &idx)| idx)
+                        .filter(move |&idx| idx != a as u32)
+                        .take(k),
+                )
             })
             .collect();
 

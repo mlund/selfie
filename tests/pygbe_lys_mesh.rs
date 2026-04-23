@@ -54,10 +54,7 @@ fn lysozyme_single_surface_pipeline() {
     // Sanity on the total integer charge: protein at neutral pH should
     // be within a few units of zero.
     let total: f64 = charges.values.iter().sum();
-    assert!(
-        total.abs() < 20.0,
-        "unreasonable total charge: {total}"
-    );
+    assert!(total.abs() < 20.0, "unreasonable total charge: {total}");
     eprintln!(
         "lys_single_1 fixture: {} faces, {} atoms, total charge {:+.3} e",
         surface.num_faces(),
@@ -115,8 +112,8 @@ fn lysozyme_full_solve() {
         .sum::<f64>()
         * 0.5;
     let e_solv_kcal = to_kcal_per_mol(e_solv_reduced);
-    let rel_err = (e_solv_kcal - PYGBE_ESOLV_SINGLE_LYS1_KCAL).abs()
-        / PYGBE_ESOLV_SINGLE_LYS1_KCAL.abs();
+    let rel_err =
+        (e_solv_kcal - PYGBE_ESOLV_SINGLE_LYS1_KCAL).abs() / PYGBE_ESOLV_SINGLE_LYS1_KCAL.abs();
     eprintln!(
         "E_solv (Lys1 single-surface): ours = {:+.2} kcal/mol, \
          pygbe = {:+.2} kcal/mol, rel. err = {:.2}%",

@@ -34,10 +34,7 @@ impl Cube {
         let center = 0.5 * (lo + hi);
         let extent = hi - lo;
         let half_width = 0.5 * extent.max_element() + eps_pad;
-        Self {
-            center,
-            half_width,
-        }
+        Self { center, half_width }
     }
 
     /// Split into 8 equal-volume octants. Octant `i`'s bit pattern
