@@ -1,30 +1,23 @@
 //! Matrix-free linear operator for the Juffer BIE block system.
 //!
-//! Implements the action `y = A·x` without ever materialising `A`, which
-//! at lysozyme scale (N ≈ 14 k faces → 2N × 2N dense system ≈ 6.6 GB)
-//! is the difference between "fits on a laptop" and "doesn't". Each
-//! `apply` costs O(N²) kernel evaluations — the same work as one row
-//! of the old dense assembly, now spread across rayon-parallel rows.
+//! Implements the action `y = A·x` via the Barnes-Hut treecode in
+//! [`crate::solver::treecode`]: far clusters use Taylor-order-2
+//! single-layer + order-1 double-layer multipole; near clusters use
+//! panel-integrated `kernel::block_entries`. O(N log N) per apply;
+//! replaces the O(N²) direct path used up through Stage 3a.
 //!
-//! A Barnes-Hut treecode (see `crate::solver::treecode`) is wired in
-//! as scaffolding for an eventual O(N log N) path, but is currently
-//! *not used by apply* — its Taylor-order-2 multipole drops the
-//! double-layer far-field, which proved to cost ~2 % relative on
-//! matrix entries and pushed Kirkwood convergence below our 1 %
-//! acceptance gate. Enabling the treecode requires double-layer
-//! multipole support first (Stage 3b — dipole moments `D_α`,
-//! `M_αβ`).
+//! At lysozyme scale (N ≈ 14 k) the matrix never materialises — dense
+//! LU would demand 6.6 GB.
 //!
-//! Per-iteration wall-clock spacing is emitted at `log::debug!` for
-//! diagnosing convergence stalls. Install an `env_logger` (or similar)
-//! and set `RUST_LOG=selfie=debug` to see it.
+//! Per-iteration wall-clock spacing is emitted at `log::debug!`.
+//! Install an `env_logger` (or similar) and set
+//! `RUST_LOG=selfie=debug` to see it.
 
 use crate::geometry::panel::FaceGeoms;
-use crate::solver::kernel::block_entries;
+use crate::solver::treecode::PointTreecode;
 use faer::dyn_stack::{MemStack, StackReq};
 use faer::matrix_free::LinOp;
 use faer::{MatMut, MatRef, Par};
-use rayon::prelude::*;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -32,19 +25,35 @@ use std::time::Instant;
 static APPLY_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FIRST_APPLY: OnceLock<Instant> = OnceLock::new();
 
+// why: Barnes-Hut MAC parameter. At `θ = 0.5` the Taylor-order-2
+// single-layer error is ~10⁻¹ per far cluster and the order-1
+// double-layer error is ~θ² ≈ 0.25. Heterogeneous protein meshes
+// can push these past the 1 % acceptance gate of the Kirkwood test;
+// keep `θ` conservative and prefer direct-sum leaves to widen the
+// near-field (tighter MAC means more near pairs → smaller MAC error).
+const MAC_THETA: f64 = 0.4;
+// Max panels per leaf. Small leaves keep the tree deep enough that
+// MAC passes at shallow levels on cluster-in-cluster geometries like
+// protein SES. Empirically `n_crit = 50` is the sweet spot between
+// direct-sum cost per leaf and tree depth.
+const N_CRIT: usize = 50;
+
 #[derive(Debug)]
 pub(super) struct BemOperator<'a> {
     pub(super) geom: &'a FaceGeoms,
     pub(super) eps_ratio: f64,
     pub(super) kappa: f64,
+    pub(super) tree: PointTreecode<'a>,
 }
 
 impl<'a> BemOperator<'a> {
     pub(super) fn new(geom: &'a FaceGeoms, eps_ratio: f64, kappa: f64) -> Self {
+        let tree = PointTreecode::new(geom, MAC_THETA, N_CRIT);
         Self {
             geom,
             eps_ratio,
             kappa,
+            tree,
         }
     }
 }
@@ -68,39 +77,16 @@ impl LinOp<f64> for BemOperator<'_> {
             Instant::now()
         });
         let n = self.geom.len();
-        // why: materialise the column as a flat `&[f64]` once so the
-        // parallel closure does slice indexing (no bounds-check per
-        // entry against MatRef row/col shape).
         let x: Vec<f64> = rhs.col(0).iter().copied().collect();
         let (x_f, x_h) = x.split_at(n);
 
-        // y[a]     = Σ_b (½δ_ab + k0p)·f_b + (−ε_ratio·k0)·h_b
-        // y[n+a]   = Σ_b (½δ_ab − kkp)·f_b + kk·h_b
-        let y: Vec<(f64, f64)> = (0..n)
-            .into_par_iter()
-            .map(|a| {
-                // Self-panel entry once, outside the b-loop: k'-primed
-                // blocks vanish for flat centroid-collocation, so the
-                // self contribution is ½I ± 0 on the diagonal plus the
-                // single- and double-layer K terms from block_entries.
-                let (k0_aa, _, kk_aa, _) = block_entries(self.geom, a, a, self.kappa);
-                let mut top = 0.5f64.mul_add(x_f[a], -self.eps_ratio * k0_aa * x_h[a]);
-                let mut bot = 0.5f64.mul_add(x_f[a], kk_aa * x_h[a]);
-                for b in 0..n {
-                    if b == a {
-                        continue;
-                    }
-                    let (k0, k0p, kk, kkp) = block_entries(self.geom, a, b, self.kappa);
-                    top += k0p.mul_add(x_f[b], -self.eps_ratio * k0 * x_h[b]);
-                    bot += (-kkp).mul_add(x_f[b], kk * x_h[b]);
-                }
-                (top, bot)
-            })
-            .collect();
+        let (top, bot) = self
+            .tree
+            .apply_bem_operator(x_f, x_h, self.kappa, self.eps_ratio);
 
-        for (a, &(top, bot)) in y.iter().enumerate() {
-            out[(a, 0)] = top;
-            out[(n + a, 0)] = bot;
+        for (a, (&t, &b)) in top.iter().zip(&bot).enumerate() {
+            out[(a, 0)] = t;
+            out[(n + a, 0)] = b;
         }
 
         if let Some(t) = t_apply {

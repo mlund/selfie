@@ -79,7 +79,7 @@ pub(super) struct Node {
 }
 
 impl Node {
-    pub(super) fn is_leaf(&self) -> bool {
+    pub(super) const fn is_leaf(&self) -> bool {
         self.children.is_empty()
     }
 }

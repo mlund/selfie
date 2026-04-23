@@ -103,11 +103,10 @@ impl<'g> PointTreecode<'g> {
     ///
     /// Near-field pairs use the panel-integrated `block_entries` kernel
     /// (exact within quadrature order) for all four kernel flavours.
-    /// Far-field clusters contribute single-layer only via the
-    /// cartesian Taylor multipole, with double-layer far-field
-    /// approximated to zero — the double-layer kernel decays as `1/R²`
-    /// vs single-layer's `1/R`, so at MAC `θ = 0.5` the dropped
-    /// double-layer far-field is ~10⁻² of the retained terms.
+    /// Far-field clusters use the cartesian Taylor multipole: the
+    /// single-layer moments (built from `area·h` weights) drive the
+    /// `K·h` sums, and the order-1 double-layer moments (built from
+    /// `area·f·n` weights) drive the `K'·f` sums.
     pub(super) fn apply_bem_operator(
         &self,
         x_f: &[f64],
@@ -120,16 +119,13 @@ impl<'g> PointTreecode<'g> {
         debug_assert_eq!(x_h.len(), n);
         debug_assert!(kappa >= 0.0, "kappa must be non-negative");
 
-        // why: far-field single-layer moments need the area weight —
-        // `block_entries`'s panel-integrated kernels include area
+        // why: `block_entries`'s panel-integrated kernels include area
         // implicitly (as `∫_{T_b} ... dS'`), so the point-source
-        // multipole replacement must multiply density by area.
-        let q_h: Vec<f64> = x_h
-            .iter()
-            .zip(self.geom.areas.iter())
-            .map(|(h, a)| h * a)
-            .collect();
-        let expansions = self.build_expansions(&q_h);
+        // multipole replacement must multiply density by area. The
+        // upward sweep accumulates BOTH single-layer moments (from
+        // `area·h`) and double-layer moments (from `area·f·n`) in one
+        // pass.
+        let expansions = self.build_bem_expansions(x_f, x_h);
 
         (0..n)
             .into_par_iter()
@@ -141,6 +137,19 @@ impl<'g> PointTreecode<'g> {
                 },
             )
             .unzip()
+    }
+
+    /// Build moments carrying both single-layer (from `area·h`) and
+    /// double-layer (from `area·f·n`) contributions in one upward
+    /// sweep of the tree.
+    fn build_bem_expansions(&self, x_f: &[f64], x_h: &[f64]) -> Vec<Expansion> {
+        let geom = self.geom;
+        self.build_expansions_with(|exp, pid| {
+            let s = geom.centroids[pid];
+            let area = geom.areas[pid];
+            exp.accumulate(s, x_h[pid] * area);
+            exp.accumulate_dipole(s, x_f[pid] * area, geom.normals[pid]);
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -178,15 +187,20 @@ impl<'g> PointTreecode<'g> {
             }
             let dist = (target - node.bbox.center).length();
             if node.bbox.bounding_radius() < self.theta * dist {
-                // Far-field: single-layer multipole; double-layer
-                // far-field dropped (O(1/R²) vs O(1/R)).
-                let k0_far = exps[idx].evaluate_laplace(target);
-                top -= eps_ratio * k0_far;
-                bot += if kappa == 0.0 {
-                    k0_far
+                // Far-field: single-layer from `h`-moments, double-
+                // layer from `f`-moments. Pair evaluators return
+                // both kernels in one pass — share the distance-power
+                // chain and (for Yukawa) the exp/A/B coefficients.
+                let exp = &exps[idx];
+                let (k0_far, k0p_far) = exp.evaluate_laplace_pair(target);
+                top += k0p_far - eps_ratio * k0_far;
+                if kappa == 0.0 {
+                    // κ = 0: Yukawa ≡ Laplace, skip the second pair.
+                    bot += k0_far - k0p_far;
                 } else {
-                    exps[idx].evaluate_yukawa(target, kappa)
-                };
+                    let (kk_far, kkp_far) = exp.evaluate_yukawa_pair(target, kappa);
+                    bot += kk_far - kkp_far;
+                }
             } else {
                 for &ci in &node.children {
                     stack.push(ci as usize);
@@ -196,12 +210,29 @@ impl<'g> PointTreecode<'g> {
         (top, bot)
     }
 
-    /// Upward sweep: compute a multipole expansion per tree node.
-    /// Because `Tree::new` assigns children indices strictly greater
-    /// than their parent, iterating the node array in reverse gives
-    /// a natural post-order: by the time we reach an internal node
-    /// all of its children already have expansions computed.
+    /// Point-source single-layer upward sweep. Test-only; production
+    /// uses [`Self::build_bem_expansions`].
+    #[cfg(test)]
     fn build_expansions(&self, q: &[f64]) -> Vec<Expansion> {
+        let geom = self.geom;
+        self.build_expansions_with(|exp, pid| {
+            exp.accumulate(geom.centroids[pid], q[pid]);
+        })
+    }
+
+    /// Upward sweep skeleton shared by every moment-build entry point.
+    /// `leaf_accum(exp, panel_id)` is called once per panel inside its
+    /// leaf's scope; internal nodes gather children via
+    /// [`Expansion::shifted_to`] + [`Expansion::fold`].
+    ///
+    /// why: `Tree::new` assigns child indices strictly greater than
+    /// parent, so iterating the node array in reverse gives a natural
+    /// post-order — each internal node finds its children's moments
+    /// already populated.
+    fn build_expansions_with<F>(&self, mut leaf_accum: F) -> Vec<Expansion>
+    where
+        F: FnMut(&mut Expansion, usize),
+    {
         let mut exps: Vec<Expansion> = self
             .tree
             .nodes
@@ -215,13 +246,13 @@ impl<'g> PointTreecode<'g> {
             let node = &self.tree.nodes[i];
             if node.is_leaf() {
                 for &pid in &node.panel_ids {
-                    exps[i].accumulate(self.geom.centroids[pid as usize], q[pid as usize]);
+                    leaf_accum(&mut exps[i], pid as usize);
                 }
             } else {
                 let parent_center = node.bbox.center;
-                // Child-fold; we snapshot each child before folding so
-                // the borrow checker is happy writing back into
-                // `exps[i]` while reading `exps[child]`.
+                // why: snapshot children before folding so the borrow
+                // checker is happy writing `exps[i]` while reading
+                // `exps[child]`. Vec<u32> × ≤ 8 entries; negligible.
                 let children = node.children.clone();
                 for ci in children {
                     let shifted = exps[ci as usize].shifted_to(parent_center);

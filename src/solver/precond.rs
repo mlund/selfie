@@ -47,7 +47,7 @@ impl BlockJacobi {
         Self { inv_diag }
     }
 
-    fn n(&self) -> usize {
+    const fn n(&self) -> usize {
         self.inv_diag.len()
     }
 }
@@ -169,7 +169,7 @@ impl NeighborBlock {
         }
     }
 
-    fn n(&self) -> usize {
+    const fn n(&self) -> usize {
         self.local_lu.len()
     }
 }
