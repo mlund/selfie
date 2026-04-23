@@ -6,6 +6,15 @@
 //! `apply` costs O(N²) kernel evaluations — the same work as one row
 //! of the old dense assembly, now spread across rayon-parallel rows.
 //!
+//! A Barnes-Hut treecode (see `crate::solver::treecode`) is wired in
+//! as scaffolding for an eventual O(N log N) path, but is currently
+//! *not used by apply* — its Taylor-order-2 multipole drops the
+//! double-layer far-field, which proved to cost ~2 % relative on
+//! matrix entries and pushed Kirkwood convergence below our 1 %
+//! acceptance gate. Enabling the treecode requires double-layer
+//! multipole support first (Stage 3b — dipole moments `D_α`,
+//! `M_αβ`).
+//!
 //! Per-iteration wall-clock spacing is emitted at `log::debug!` for
 //! diagnosing convergence stalls. Install an `env_logger` (or similar)
 //! and set `RUST_LOG=selfie=debug` to see it.
@@ -28,6 +37,16 @@ pub(super) struct BemOperator<'a> {
     pub(super) geom: &'a FaceGeoms,
     pub(super) eps_ratio: f64,
     pub(super) kappa: f64,
+}
+
+impl<'a> BemOperator<'a> {
+    pub(super) fn new(geom: &'a FaceGeoms, eps_ratio: f64, kappa: f64) -> Self {
+        Self {
+            geom,
+            eps_ratio,
+            kappa,
+        }
+    }
 }
 
 impl LinOp<f64> for BemOperator<'_> {

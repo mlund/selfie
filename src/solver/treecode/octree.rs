@@ -89,7 +89,6 @@ impl Node {
 #[derive(Debug)]
 pub(super) struct Tree {
     pub(super) nodes: Vec<Node>,
-    pub(super) n_crit: usize,
 }
 
 impl Tree {
@@ -157,7 +156,7 @@ impl Tree {
             }
         }
 
-        Self { nodes, n_crit }
+        Self { nodes }
     }
 }
 

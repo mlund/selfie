@@ -65,11 +65,11 @@ impl<'s> BemSolution<'s> {
             });
         }
         let rhs = assembly::build_rhs(surface, media, side, charge_positions, charge_values);
-        let op = operator::BemOperator {
-            geom: surface.geom_internal(),
-            eps_ratio: media.eps_out / media.eps_in,
-            kappa: media.kappa,
-        };
+        let op = operator::BemOperator::new(
+            surface.geom_internal(),
+            media.eps_out / media.eps_in,
+            media.kappa,
+        );
         let mut f = gmres::solve(op, rhs)?;
 
         // why: block ordering in assembly is [f; h] (top = potential,

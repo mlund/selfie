@@ -46,6 +46,9 @@ impl Expansion {
     /// Build from `N` sources `(s_i, q_i)` around `center`. Purely
     /// additive over sources — safe to fold in parallel via
     /// [`Self::fold`] if the caller already has per-worker partials.
+    /// Test-only helper; production builds moments via the tree's
+    /// upward sweep (see `treecode::build_expansions`).
+    #[cfg(test)]
     pub(super) fn from_sources(center: DVec3, sources: &[(DVec3, f64)]) -> Self {
         let mut exp = Self {
             center,

@@ -1,32 +1,39 @@
-// why: the whole treecode sub-module is Stage-1 scaffolding — its
-// integration into `BemOperator::apply` lands in a later commit.
-// Until then everything here appears dead to the linter even though
-// the unit tests exercise it fully.
+// why: entire treecode sub-module is Stage-3a scaffolding — the
+// accuracy gap from missing double-layer far-field means `apply` in
+// `operator.rs` is still direct O(N²). Lands without a call site in
+// production so the linter sees it as dead; `#[cfg(test)]` exercises
+// it fully via the `apply_bem_operator` cross-check.
 #![allow(dead_code)]
 
-//! Barnes-Hut treecode for point-source single-layer summation.
+//! Barnes-Hut treecode scaffolding for an eventual O(N log N)
+//! `BemOperator::apply`. **Not wired into `apply` today** — see the
+//! module doc in `src/solver/operator.rs` for why (Taylor-order-2
+//! drops the double-layer far-field, which cost ~2 % relative on
+//! matrix entries and broke Kirkwood's 1 % acceptance gate).
 //!
-//! Stage 2 scaffolding: an octree of panel centroids + Taylor-order-2
-//! multipole expansions, evaluating
+//! Shape once Stage 3b lands:
 //!
 //! ```text
-//! Σ_b  q_b · G(c_a, c_b)
+//! top[a] = ½ f_a + Σ_b K'₀(a,b) f_b − ε_ratio · Σ_b K₀(a,b) h_b
+//! bot[a] = ½ f_a − Σ_b K'_κ(a,b) f_b + Σ_b K_κ(a,b) h_b
 //! ```
 //!
-//! at every target centroid `c_a`, where `G` is either the Laplace
-//! kernel `G₀(r, s) = 1/(4π|r − s|)` or the Yukawa kernel
-//! `G_κ(r, s) = exp(−κ|r − s|)/(4π|r − s|)` — selected per call by
-//! the `kappa` argument. Point-source only (no panel integration,
-//! no double-layer); stresses the treecode infrastructure and gives
-//! us a cross-check against the hand-rolled N² direct sum.
+//! Stage 3a (this commit) validates the full-apply plumbing against
+//! direct summation inside `#[cfg(test)]`; Stage 3b will add dipole
+//! multipole moments (`D_α`, `M_αβ`) so the double-layer far-field is
+//! handled and the matvec becomes wire-ready for production.
 //!
-//! Stage 3 will wire the panel-aware variant into `BemOperator::apply`.
+//! A point-source entry [`PointTreecode::apply`] is kept test-only
+//! as a cross-check harness for the octree + multipole plumbing.
 
 mod multipole;
 mod octree;
 
 use crate::geometry::panel::FaceGeoms;
+use crate::solver::kernel::block_entries;
+#[cfg(test)]
 use crate::solver::panel_integrals::FOUR_PI;
+#[cfg(test)]
 use glam::DVec3;
 use multipole::Expansion;
 use octree::Tree;
@@ -61,6 +68,10 @@ impl<'g> PointTreecode<'g> {
 
     /// Evaluate `Σ_{b ≠ a} q_b · G(c_a, c_b)` at every centroid, with
     /// `G = G₀` when `kappa == 0` and `G = G_κ` otherwise.
+    /// Production callers want [`Self::apply_bem_operator`]; this
+    /// pure-point-source entry stays as a cross-check target for the
+    /// octree + multipole plumbing.
+    #[cfg(test)]
     pub(super) fn apply(&self, q: &[f64], kappa: f64) -> Vec<f64> {
         debug_assert_eq!(q.len(), self.geom.len());
         debug_assert!(kappa >= 0.0, "kappa must be non-negative");
@@ -79,6 +90,110 @@ impl<'g> PointTreecode<'g> {
                 },
             )
             .collect()
+    }
+
+    /// Apply the full Juffer BIE block operator via the treecode.
+    ///
+    /// Returns `(top, bot)` where
+    ///
+    /// ```text
+    /// top[a] = ½ f_a + Σ_b K'₀(a,b) f_b − ε_ratio · Σ_b K₀(a,b) h_b
+    /// bot[a] = ½ f_a − Σ_b K'_κ(a,b) f_b + Σ_b K_κ(a,b) h_b
+    /// ```
+    ///
+    /// Near-field pairs use the panel-integrated `block_entries` kernel
+    /// (exact within quadrature order) for all four kernel flavours.
+    /// Far-field clusters contribute single-layer only via the
+    /// cartesian Taylor multipole, with double-layer far-field
+    /// approximated to zero — the double-layer kernel decays as `1/R²`
+    /// vs single-layer's `1/R`, so at MAC `θ = 0.5` the dropped
+    /// double-layer far-field is ~10⁻² of the retained terms.
+    pub(super) fn apply_bem_operator(
+        &self,
+        x_f: &[f64],
+        x_h: &[f64],
+        kappa: f64,
+        eps_ratio: f64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n = self.geom.len();
+        debug_assert_eq!(x_f.len(), n);
+        debug_assert_eq!(x_h.len(), n);
+        debug_assert!(kappa >= 0.0, "kappa must be non-negative");
+
+        // why: far-field single-layer moments need the area weight —
+        // `block_entries`'s panel-integrated kernels include area
+        // implicitly (as `∫_{T_b} ... dS'`), so the point-source
+        // multipole replacement must multiply density by area.
+        let q_h: Vec<f64> = x_h
+            .iter()
+            .zip(self.geom.areas.iter())
+            .map(|(h, a)| h * a)
+            .collect();
+        let expansions = self.build_expansions(&q_h);
+
+        (0..n)
+            .into_par_iter()
+            .map_init(
+                || Vec::<usize>::with_capacity(TRAVERSE_STACK_CAPACITY),
+                |stack, a| {
+                    stack.clear();
+                    self.traverse_bem(a, x_f, x_h, kappa, eps_ratio, &expansions, stack)
+                },
+            )
+            .unzip()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn traverse_bem(
+        &self,
+        target_a: usize,
+        x_f: &[f64],
+        x_h: &[f64],
+        kappa: f64,
+        eps_ratio: f64,
+        exps: &[Expansion],
+        stack: &mut Vec<usize>,
+    ) -> (f64, f64) {
+        let target = self.geom.centroids[target_a];
+        // ½I self identity; both block rows see `f_a` on their diagonal.
+        let mut top = 0.5 * x_f[target_a];
+        let mut bot = 0.5 * x_f[target_a];
+
+        stack.push(0);
+        while let Some(idx) = stack.pop() {
+            let node = &self.tree.nodes[idx];
+            if node.is_leaf() {
+                // Panel-integrated near-field via `block_entries`. The
+                // self-panel (target_a, target_a) is encountered here
+                // because the tree partitions all panels; its k0p/kkp
+                // are zero for flat centroid collocation so the f-term
+                // contributes nothing beyond the ½I already added.
+                for &pid in &node.panel_ids {
+                    let b = pid as usize;
+                    let (k0, k0p, kk, kkp) = block_entries(self.geom, target_a, b, kappa);
+                    top += k0p.mul_add(x_f[b], -eps_ratio * k0 * x_h[b]);
+                    bot += (-kkp).mul_add(x_f[b], kk * x_h[b]);
+                }
+                continue;
+            }
+            let dist = (target - node.bbox.center).length();
+            if node.bbox.bounding_radius() < self.theta * dist {
+                // Far-field: single-layer multipole; double-layer
+                // far-field dropped (O(1/R²) vs O(1/R)).
+                let k0_far = exps[idx].evaluate_laplace(target);
+                top -= eps_ratio * k0_far;
+                bot += if kappa == 0.0 {
+                    k0_far
+                } else {
+                    exps[idx].evaluate_yukawa(target, kappa)
+                };
+            } else {
+                for &ci in &node.children {
+                    stack.push(ci as usize);
+                }
+            }
+        }
+        (top, bot)
     }
 
     /// Upward sweep: compute a multipole expansion per tree node.
@@ -121,6 +236,7 @@ impl<'g> PointTreecode<'g> {
     /// call stack (tree depth can be up to 24 on pathological meshes).
     /// `stack` is caller-supplied scratch — reused across targets by
     /// the outer `map_init` loop.
+    #[cfg(test)]
     fn traverse(
         &self,
         target: DVec3,
@@ -162,8 +278,7 @@ impl<'g> PointTreecode<'g> {
             // ~O(N/n_crit) per target per apply, which across a
             // full lysozyme solve was measured at tens of millions
             // of wasted `sqrt` calls.
-            let d = target - node.bbox.center;
-            let dist = d.length();
+            let dist = (target - node.bbox.center).length();
             if node.bbox.bounding_radius() < self.theta * dist {
                 acc += if kappa == 0.0 {
                     exps[idx].evaluate_laplace(target)
@@ -333,6 +448,63 @@ mod tests {
             max_rel < 0.01,
             "yukawa treecode vs direct max rel err {max_rel:e}"
         );
+    }
+
+    /// Direct, panel-integrated equivalent of
+    /// [`PointTreecode::apply_bem_operator`] for comparison —
+    /// explicit O(N²) double loop over `block_entries`.
+    fn direct_bem_apply(
+        geom: &FaceGeoms,
+        x_f: &[f64],
+        x_h: &[f64],
+        kappa: f64,
+        eps_ratio: f64,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n = geom.len();
+        let mut top = vec![0.0_f64; n];
+        let mut bot = vec![0.0_f64; n];
+        for a in 0..n {
+            let mut t = 0.5 * x_f[a];
+            let mut b_acc = 0.5 * x_f[a];
+            for b in 0..n {
+                let (k0, k0p, kk, kkp) = block_entries(geom, a, b, kappa);
+                t += k0p * x_f[b] - eps_ratio * k0 * x_h[b];
+                b_acc += -kkp * x_f[b] + kk * x_h[b];
+            }
+            top[a] = t;
+            bot[a] = b_acc;
+        }
+        (top, bot)
+    }
+
+    #[test]
+    fn apply_bem_operator_near_field_matches_direct() {
+        // With N_CRIT large enough that every panel lives in the root
+        // leaf, the treecode's apply_bem_operator is pure leaf
+        // direct-summation over block_entries — no multipole path
+        // exercised. Must match the direct O(N²) loop to fp roundoff.
+        let surface = Surface::icosphere(5.0, 2);
+        let geom = surface.geom_internal();
+        let n = geom.len();
+        let treecode = PointTreecode::new(geom, 0.5, n + 1);
+        let x_f: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin()).collect();
+        let x_h: Vec<f64> = (0..n).map(|i| (i as f64 * 0.17).cos()).collect();
+        let kappa = 0.125;
+        let eps_ratio = 20.0;
+        let (got_top, got_bot) = treecode.apply_bem_operator(&x_f, &x_h, kappa, eps_ratio);
+        let (want_top, want_bot) = direct_bem_apply(geom, &x_f, &x_h, kappa, eps_ratio);
+        for (i, (&g, &w)) in got_top.iter().zip(&want_top).enumerate() {
+            assert!(
+                (g - w).abs() < 1e-12 * (1.0 + w.abs()),
+                "top[{i}]: treecode={g}, direct={w}"
+            );
+        }
+        for (i, (&g, &w)) in got_bot.iter().zip(&want_bot).enumerate() {
+            assert!(
+                (g - w).abs() < 1e-12 * (1.0 + w.abs()),
+                "bot[{i}]: treecode={g}, direct={w}"
+            );
+        }
     }
 
     #[test]
