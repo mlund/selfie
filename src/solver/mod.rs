@@ -211,17 +211,20 @@ fn reaction_field_at_impl(
         .zip(&geom.tris);
     let mut sum = 0.0;
     for ((((&f_b, &h_b), &nb), &ab), &tri) in panels {
+        let points: panel_integrals::GaussPoints<3> = tri.into();
         let mut quad = 0.0;
-        for (p, w) in panel_integrals::gauss3_points(tri) {
-            let d = r - p;
-            let dist = d.length();
+        for i in 0..3 {
+            let dx = r.x - points.xs[i];
+            let dy = r.y - points.ys[i];
+            let dz = r.z - points.zs[i];
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
             let inv_r = 1.0 / dist;
             let exp_kr = (-kappa_eval * dist).exp();
             let g = exp_kr * inv_r / FOUR_PI;
+            let d_dot_nb = dx * nb.x + dy * nb.y + dz * nb.z;
             let dg_dn_source =
-                kappa_eval.mul_add(dist, 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r
-                    / FOUR_PI;
-            quad += w * (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
+                kappa_eval.mul_add(dist, 1.0) * exp_kr * d_dot_nb * inv_r * inv_r * inv_r / FOUR_PI;
+            quad += points.ws[i] * (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
         }
         sum += quad * ab;
     }

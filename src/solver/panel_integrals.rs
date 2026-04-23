@@ -75,44 +75,79 @@ pub(super) fn exp_neg(x: f64) -> f64 {
     two_pow_neg_n * p
 }
 
-/// Barycentric 3-point Gauss rule (degree 2) on a triangle, with
-/// explicit weights so the caller scales by `area / (4π)` rather than
-/// `area / (3·4π)` — keeping the weight convention identical to the
-/// 7-point rule below.
-pub(super) fn gauss3_points(tri: [DVec3; 3]) -> [(DVec3, f64); 3] {
-    // Barycentrics (2/3, 1/6, 1/6) + cyclic permutations.
-    const A: f64 = 2.0 / 3.0;
-    const B: f64 = 1.0 / 6.0;
-    const W: f64 = 1.0 / 3.0;
-    [
-        (tri[0] * A + tri[1] * B + tri[2] * B, W),
-        (tri[0] * B + tri[1] * A + tri[2] * B, W),
-        (tri[0] * B + tri[1] * B + tri[2] * A, W),
-    ]
+/// Gauss-quadrature points packed struct-of-arrays. Four parallel
+/// `[f64; N]` arrays (x, y, z, weight) so the accumulation kernel
+/// does 4 stride-1 loads per iteration — the autovectoriser pairs
+/// consecutive iterations into NEON `v.2d` lanes when it can see
+/// through the inner `sqrt`, `exp`, and reciprocal arithmetic.
+pub(super) struct GaussPoints<const N: usize> {
+    pub(super) xs: [f64; N],
+    pub(super) ys: [f64; N],
+    pub(super) zs: [f64; N],
+    pub(super) ws: [f64; N],
 }
 
-/// Dunavant degree-5 rule on a reference triangle, mapped to world-space
-/// via barycentric interpolation. The 7 barycentric triples + weights
-/// below are the standard Stroud/Dunavant set (weights sum to 1).
-fn gauss7_points(tri: [DVec3; 3]) -> [(DVec3, f64); 7] {
-    const T: f64 = 1.0 / 3.0;
-    const W0: f64 = 9.0 / 40.0;
-    const A1: f64 = 0.797_426_985_353_087_3;
-    const B1: f64 = 0.101_286_507_323_456_3;
-    const W1: f64 = 0.125_939_180_544_827_1;
-    const A2: f64 = 0.059_715_871_789_769_8;
-    const B2: f64 = 0.470_142_064_105_115_1;
-    const W2: f64 = 0.132_394_152_788_506_2;
-    let p = |a: f64, b: f64, c: f64| tri[0] * a + tri[1] * b + tri[2] * c;
-    [
-        (p(T, T, T), W0),
-        (p(A1, B1, B1), W1),
-        (p(B1, A1, B1), W1),
-        (p(B1, B1, A1), W1),
-        (p(A2, B2, B2), W2),
-        (p(B2, A2, B2), W2),
-        (p(B2, B2, A2), W2),
-    ]
+/// Barycentric 3-point Gauss rule (degree 2). The const-generic `N`
+/// on `GaussPoints` disambiguates between the 3- and 7-point rules at
+/// the target type, so `tri.into()` routes to whichever is asked for.
+impl From<[DVec3; 3]> for GaussPoints<3> {
+    fn from(tri: [DVec3; 3]) -> Self {
+        // Barycentrics (2/3, 1/6, 1/6) + cyclic permutations.
+        // Each point has the A weight on one vertex and B on the
+        // other two — factor the shared `B·(sum of two)` then FMA in
+        // the `A·vertex` term.
+        const A: f64 = 2.0 / 3.0;
+        const B: f64 = 1.0 / 6.0;
+        const W: f64 = 1.0 / 3.0;
+        let [t0, t1, t2] = tri;
+        let sum12 = t1 + t2;
+        let sum02 = t0 + t2;
+        let sum01 = t0 + t1;
+        let p0 = DVec3::splat(A).mul_add(t0, sum12 * B);
+        let p1 = DVec3::splat(A).mul_add(t1, sum02 * B);
+        let p2 = DVec3::splat(A).mul_add(t2, sum01 * B);
+        Self {
+            xs: [p0.x, p1.x, p2.x],
+            ys: [p0.y, p1.y, p2.y],
+            zs: [p0.z, p1.z, p2.z],
+            ws: [W, W, W],
+        }
+    }
+}
+
+/// Dunavant degree-5 rule on a reference triangle. Standard
+/// Stroud/Dunavant set (weights sum to 1).
+impl From<[DVec3; 3]> for GaussPoints<7> {
+    fn from(tri: [DVec3; 3]) -> Self {
+        // Centroid + two `(A, B, B)`-cyclic families at different
+        // weights. Reuse the three pairwise sums (t1+t2, t0+t2, t0+t1)
+        // across the two families.
+        const T: f64 = 1.0 / 3.0;
+        const W0: f64 = 9.0 / 40.0;
+        const A1: f64 = 0.797_426_985_353_087_3;
+        const B1: f64 = 0.101_286_507_323_456_3;
+        const W1: f64 = 0.125_939_180_544_827_1;
+        const A2: f64 = 0.059_715_871_789_769_8;
+        const B2: f64 = 0.470_142_064_105_115_1;
+        const W2: f64 = 0.132_394_152_788_506_2;
+        let [t0, t1, t2] = tri;
+        let sum12 = t1 + t2;
+        let sum02 = t0 + t2;
+        let sum01 = t0 + t1;
+        let p0 = (t0 + sum12) * T;
+        let p1 = DVec3::splat(A1).mul_add(t0, sum12 * B1);
+        let p2 = DVec3::splat(A1).mul_add(t1, sum02 * B1);
+        let p3 = DVec3::splat(A1).mul_add(t2, sum01 * B1);
+        let p4 = DVec3::splat(A2).mul_add(t0, sum12 * B2);
+        let p5 = DVec3::splat(A2).mul_add(t1, sum02 * B2);
+        let p6 = DVec3::splat(A2).mul_add(t2, sum01 * B2);
+        Self {
+            xs: [p0.x, p1.x, p2.x, p3.x, p4.x, p5.x, p6.x],
+            ys: [p0.y, p1.y, p2.y, p3.y, p4.y, p5.y, p6.y],
+            zs: [p0.z, p1.z, p2.z, p3.z, p4.z, p5.z, p6.z],
+            ws: [W0, W1, W1, W1, W2, W2, W2],
+        }
+    }
 }
 
 /// Off-diagonal K_κ and K_κ' at once via 3-point Gauss (degree 2,
@@ -124,7 +159,7 @@ pub fn k_and_kprime_off(
     ab: f64,
     kappa: f64,
 ) -> (f64, f64) {
-    accumulate_kernel(&gauss3_points(tri), observer, nb, ab, kappa)
+    accumulate_kernel(&GaussPoints::<3>::from(tri), observer, nb, ab, kappa)
 }
 
 /// 7-point Dunavant version of [`k_and_kprime_off`] for near-singular
@@ -140,15 +175,19 @@ pub fn k_and_kprime_near(
     ab: f64,
     kappa: f64,
 ) -> (f64, f64) {
-    accumulate_kernel(&gauss7_points(tri), observer, nb, ab, kappa)
+    accumulate_kernel(&GaussPoints::<7>::from(tri), observer, nb, ab, kappa)
 }
 
 /// Shared quadrature accumulator for both rules. The κ = 0 branch
 /// skips the `exp()` and `κr + 1` factors — the Laplace block of the
-/// Juffer system has κ = 0 by construction, and profiling measured
-/// `libm::exp` at ~39 % of solve wall time before this branch.
-fn accumulate_kernel(
-    points: &[(DVec3, f64)],
+/// Juffer system has κ = 0 by construction.
+///
+/// why: iterates SoA lane arrays instead of an AoS `[(DVec3, f64); N]`,
+/// so LLVM's autovectoriser sees four stride-1 f64 loads per step and
+/// can pair adjacent quadrature iterations into NEON `v.2d` pairs.
+#[inline]
+fn accumulate_kernel<const N: usize>(
+    points: &GaussPoints<N>,
     observer: DVec3,
     nb: DVec3,
     ab: f64,
@@ -157,19 +196,33 @@ fn accumulate_kernel(
     let mut acc_k = 0.0;
     let mut acc_kp = 0.0;
     if kappa == 0.0 {
-        for &(p, w) in points {
-            let d = observer - p;
-            let r = d.length();
-            acc_k += w / r;
-            acc_kp += w * d.dot(nb) / (r * r * r);
+        for i in 0..N {
+            let dx = observer.x - points.xs[i];
+            let dy = observer.y - points.ys[i];
+            let dz = observer.z - points.zs[i];
+            let w = points.ws[i];
+            let r2 = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            let r = r2.sqrt();
+            let inv_r = r.recip();
+            let inv_r3 = inv_r * inv_r * inv_r;
+            let d_dot_nb = dx.mul_add(nb.x, dy.mul_add(nb.y, dz * nb.z));
+            acc_k += w * inv_r;
+            acc_kp += w * d_dot_nb * inv_r3;
         }
     } else {
-        for &(p, w) in points {
-            let d = observer - p;
-            let r = d.length();
+        for i in 0..N {
+            let dx = observer.x - points.xs[i];
+            let dy = observer.y - points.ys[i];
+            let dz = observer.z - points.zs[i];
+            let w = points.ws[i];
+            let r2 = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            let r = r2.sqrt();
+            let inv_r = r.recip();
+            let inv_r3 = inv_r * inv_r * inv_r;
+            let d_dot_nb = dx.mul_add(nb.x, dy.mul_add(nb.y, dz * nb.z));
             let exp_kr = exp_neg(kappa * r);
-            acc_k += w * exp_kr / r;
-            acc_kp += w * kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+            acc_k += w * exp_kr * inv_r;
+            acc_kp += w * kappa.mul_add(r, 1.0) * exp_kr * d_dot_nb * inv_r3;
         }
     }
     let s = ab / FOUR_PI;
@@ -187,9 +240,13 @@ pub fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
         return k0;
     }
     let area = 0.5 * (tri[1] - tri[0]).cross(tri[2] - tri[0]).length();
+    let points: GaussPoints<3> = tri.into();
     let mut corr = 0.0;
-    for (p, w) in gauss3_points(tri) {
-        let r = (centroid - p).length();
+    for i in 0..3 {
+        let dx = centroid.x - points.xs[i];
+        let dy = centroid.y - points.ys[i];
+        let dz = centroid.z - points.zs[i];
+        let r = (dx * dx + dy * dy + dz * dz).sqrt();
         // why: (exp(−κr) − 1)/r is analytic at r = 0 with limit −κ; guard
         // the Gauss point that may coincide with the centroid (it doesn't
         // for the (2/3, 1/6, 1/6) rule — centroid has barycentric (1/3)³ —
@@ -199,7 +256,7 @@ pub fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
         } else {
             -kappa
         };
-        corr += w * integrand;
+        corr += points.ws[i] * integrand;
     }
     k0 + corr * area / FOUR_PI
 }
