@@ -211,7 +211,7 @@ fn reaction_field_at_impl(
     let mut sum = 0.0;
     for ((((&f_b, &h_b), &nb), &ab), &tri) in panels {
         let mut quad = 0.0;
-        for p in panel_integrals::gauss3_points(tri) {
+        for (p, w) in panel_integrals::gauss3_points(tri) {
             let d = r - p;
             let dist = d.length();
             let inv_r = 1.0 / dist;
@@ -220,9 +220,9 @@ fn reaction_field_at_impl(
             let dg_dn_source =
                 kappa_eval.mul_add(dist, 1.0) * exp_kr * d.dot(nb) * inv_r * inv_r * inv_r
                     / FOUR_PI;
-            quad += (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
+            quad += w * (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
         }
-        sum += quad * ab / 3.0;
+        sum += quad * ab;
     }
     sum
 }

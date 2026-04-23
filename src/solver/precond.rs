@@ -19,6 +19,7 @@ use faer::linalg::solvers::{PartialPivLu, Solve};
 use faer::matrix_free::LinOp;
 use faer::{Mat, MatMut, MatRef, Par};
 use rayon::prelude::*;
+use std::fmt;
 
 #[derive(Debug)]
 pub(super) struct BlockJacobi {
@@ -92,7 +93,6 @@ impl LinOp<f64> for BlockJacobi {
 /// outer loop without atomics, and in practice matches or beats
 /// unrestricted ASM (Cai–Sarkis 1999).
 pub(super) struct NeighborBlock {
-    n: usize,
     k: usize,
     // Flat (n × (k+1)) indices: neighbourhoods[a·(k+1) .. (a+1)·(k+1)].
     // Position 0 is the panel itself; 1..=k are its k nearest neighbours.
@@ -101,10 +101,10 @@ pub(super) struct NeighborBlock {
     local_lu: Vec<PartialPivLu<f64>>,
 }
 
-impl std::fmt::Debug for NeighborBlock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for NeighborBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NeighborBlock")
-            .field("n", &self.n)
+            .field("n", &self.local_lu.len())
             .field("k", &self.k)
             .finish()
     }
@@ -126,13 +126,13 @@ impl NeighborBlock {
                     .filter(|&b| b != a)
                     .map(|b| ((ca - geom.centroids[b]).length_squared(), b as u32))
                     .collect();
-                // why: partial sort — only need the top k by ascending dist.
                 let pivot = k.saturating_sub(1).min(dist.len() - 1);
-                dist.select_nth_unstable_by(pivot, |x, y| {
-                    x.0.partial_cmp(&y.0).unwrap()
-                });
+                // why: partial sort — only need the top k by ascending
+                // distance. `total_cmp` is the f64-safe comparator that
+                // doesn't panic on NaN (stable since Rust 1.62).
+                dist.select_nth_unstable_by(pivot, |x, y| x.0.total_cmp(&y.0));
                 dist.truncate(k);
-                dist.sort_unstable_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+                dist.sort_unstable_by(|x, y| x.0.total_cmp(&y.0));
                 std::iter::once(a as u32).chain(dist.into_iter().map(|(_, idx)| idx))
             })
             .collect();
@@ -145,17 +145,15 @@ impl NeighborBlock {
                 let local_size = 2 * stride;
                 // Layout: row/col 2i = top of S_a[i], 2i+1 = bot of S_a[i].
                 let mat = Mat::<f64>::from_fn(local_size, local_size, |i, j| {
-                    let (row_blk, row_half) = (i / 2, i % 2);
-                    let (col_blk, col_half) = (j / 2, j % 2);
-                    let pa = nbrs[row_blk] as usize;
-                    let pb = nbrs[col_blk] as usize;
+                    let pa = nbrs[i / 2] as usize;
+                    let pb = nbrs[j / 2] as usize;
                     let (k0, k0p, kk, kkp) = block_entries(geom, pa, pb, kappa);
                     let half = if pa == pb { 0.5 } else { 0.0 };
-                    match (row_half, col_half) {
+                    match (i % 2, j % 2) {
                         (0, 0) => half + k0p,
                         (0, 1) => -eps_ratio * k0,
                         (1, 0) => half - kkp,
-                        (1, 1) => kk,
+                        (1, _) => kk,
                         _ => unreachable!(),
                     }
                 });
@@ -164,11 +162,14 @@ impl NeighborBlock {
             .collect();
 
         Self {
-            n,
             k,
             neighbourhoods,
             local_lu,
         }
+    }
+
+    fn n(&self) -> usize {
+        self.local_lu.len()
     }
 }
 
@@ -177,25 +178,26 @@ impl LinOp<f64> for NeighborBlock {
         StackReq::empty()
     }
     fn nrows(&self) -> usize {
-        2 * self.n
+        2 * self.n()
     }
     fn ncols(&self) -> usize {
-        2 * self.n
+        2 * self.n()
     }
     fn apply(&self, mut out: MatMut<f64>, rhs: MatRef<f64>, _par: Par, _stack: &mut MemStack) {
+        let n = self.n();
         let stride = self.k + 1;
         let local_size = 2 * stride;
         // why: the self-rows from every local solve are independent
         // (RAS), so we parallelise over panels; each (top, bot) pair
         // lands in its own two global slots with no contention.
-        let solved: Vec<(f64, f64)> = (0..self.n)
+        let solved: Vec<(f64, f64)> = (0..n)
             .into_par_iter()
             .map(|a| {
                 let nbrs = &self.neighbourhoods[a * stride..(a + 1) * stride];
                 let mut r_local = Mat::<f64>::zeros(local_size, 1);
                 for (i, &p) in nbrs.iter().enumerate() {
                     r_local[(2 * i, 0)] = rhs[(p as usize, 0)];
-                    r_local[(2 * i + 1, 0)] = rhs[(self.n + p as usize, 0)];
+                    r_local[(2 * i + 1, 0)] = rhs[(n + p as usize, 0)];
                 }
                 self.local_lu[a].solve_in_place(&mut r_local);
                 // Position 0 in nbrs is `a` itself; pick its two entries.
@@ -205,7 +207,7 @@ impl LinOp<f64> for NeighborBlock {
 
         for (a, &(top, bot)) in solved.iter().enumerate() {
             out[(a, 0)] = top;
-            out[(self.n + a, 0)] = bot;
+            out[(n + a, 0)] = bot;
         }
     }
     fn conj_apply(&self, _: MatMut<f64>, _: MatRef<f64>, _: Par, _: &mut MemStack) {

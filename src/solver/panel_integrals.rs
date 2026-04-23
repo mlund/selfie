@@ -26,90 +26,26 @@ use glam::DVec3;
 
 const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
 
-/// Off-diagonal K_κ and K_κ' at once via 3-point symmetric Gauss
-/// (barycentrics `(2/3, 1/6, 1/6)` + cyclic permutations, each weight 1/3).
-/// Pass `kappa = 0.0` for the Laplace kernel G_0; at κ = 0 the `exp_kr`
-/// and `κr + 1` factors collapse to 1.
-///
-/// Fused so the 3 quadrature points, `d = observer − p`, `r = |d|`,
-/// `d·n_b` and `exp(−κr)` are computed once per point instead of twice.
-pub fn k_and_kprime_off(
-    observer: DVec3,
-    tri: [DVec3; 3],
-    nb: DVec3,
-    ab: f64,
-    kappa: f64,
-) -> (f64, f64) {
-    let mut acc_k = 0.0;
-    let mut acc_kp = 0.0;
-    // why: at κ = 0 the Yukawa factors `exp(−κr)` and `κr + 1` are
-    // identically 1, so three `exp()` calls per off-diagonal entry are
-    // pure waste. The Laplace block of the Juffer system is always
-    // κ = 0, which is ~half of the kernel work in a salt solve and
-    // *all* of it in a salt-free solve. Profiling `libm::exp` was
-    // ~39 % of wall time before this branch was added.
-    if kappa == 0.0 {
-        for p in gauss3_points(tri) {
-            let d = observer - p;
-            let r = d.length();
-            acc_k += 1.0 / r;
-            acc_kp += d.dot(nb) / (r * r * r);
-        }
-    } else {
-        for p in gauss3_points(tri) {
-            let d = observer - p;
-            let r = d.length();
-            let exp_kr = (-kappa * r).exp();
-            acc_k += exp_kr / r;
-            acc_kp += kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
-        }
-    }
-    let s = ab / (3.0 * FOUR_PI);
-    (acc_k * s, acc_kp * s)
-}
-
-/// 7-point Dunavant quadrature (degree-5) for near-singular off-diagonal
-/// panel integrals. When the observer is within a few panel-widths of
-/// the source triangle, the Yukawa `1/r` kernel varies fast enough that
-/// the 3-point (degree-2) rule in [`k_and_kprime_off`] under-integrates;
-/// the resulting matrix-entry error accumulates into a spectrum wide
-/// enough to push GMRES iteration counts sharply higher on heterogeneous
-/// protein meshes. pygbe uses the same approach via its `K_fine = 19`
-/// parameter; 7-point is enough to recover pygbe-level convergence on
-/// most configurations while keeping the arithmetic cheap.
-pub fn k_and_kprime_near(
-    observer: DVec3,
-    tri: [DVec3; 3],
-    nb: DVec3,
-    ab: f64,
-    kappa: f64,
-) -> (f64, f64) {
-    let mut acc_k = 0.0;
-    let mut acc_kp = 0.0;
-    if kappa == 0.0 {
-        for &(p, w) in &gauss7_points_with_weights(tri) {
-            let d = observer - p;
-            let r = d.length();
-            acc_k += w / r;
-            acc_kp += w * d.dot(nb) / (r * r * r);
-        }
-    } else {
-        for &(p, w) in &gauss7_points_with_weights(tri) {
-            let d = observer - p;
-            let r = d.length();
-            let exp_kr = (-kappa * r).exp();
-            acc_k += w * exp_kr / r;
-            acc_kp += w * kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
-        }
-    }
-    let s = ab / FOUR_PI;
-    (acc_k * s, acc_kp * s)
+/// Barycentric 3-point Gauss rule (degree 2) on a triangle, with
+/// explicit weights so the caller scales by `area / (4π)` rather than
+/// `area / (3·4π)` — keeping the weight convention identical to the
+/// 7-point rule below.
+pub(super) fn gauss3_points(tri: [DVec3; 3]) -> [(DVec3, f64); 3] {
+    // Barycentrics (2/3, 1/6, 1/6) + cyclic permutations.
+    const A: f64 = 2.0 / 3.0;
+    const B: f64 = 1.0 / 6.0;
+    const W: f64 = 1.0 / 3.0;
+    [
+        (tri[0] * A + tri[1] * B + tri[2] * B, W),
+        (tri[0] * B + tri[1] * A + tri[2] * B, W),
+        (tri[0] * B + tri[1] * B + tri[2] * A, W),
+    ]
 }
 
 /// Dunavant degree-5 rule on a reference triangle, mapped to world-space
 /// via barycentric interpolation. The 7 barycentric triples + weights
 /// below are the standard Stroud/Dunavant set (weights sum to 1).
-fn gauss7_points_with_weights(tri: [DVec3; 3]) -> [(DVec3, f64); 7] {
+fn gauss7_points(tri: [DVec3; 3]) -> [(DVec3, f64); 7] {
     const T: f64 = 1.0 / 3.0;
     const W0: f64 = 9.0 / 40.0;
     const A1: f64 = 0.797_426_985_353_087_3;
@@ -130,17 +66,65 @@ fn gauss7_points_with_weights(tri: [DVec3; 3]) -> [(DVec3, f64); 7] {
     ]
 }
 
-/// Barycentric 3-point rule suited for smooth integrands on a triangle.
-/// Degree-of-exactness 2.
-pub fn gauss3_points(tri: [DVec3; 3]) -> [DVec3; 3] {
-    // Barycentrics (2/3, 1/6, 1/6) + cyclic permutations.
-    const A: f64 = 2.0 / 3.0;
-    const B: f64 = 1.0 / 6.0;
-    [
-        tri[0] * A + tri[1] * B + tri[2] * B,
-        tri[0] * B + tri[1] * A + tri[2] * B,
-        tri[0] * B + tri[1] * B + tri[2] * A,
-    ]
+/// Off-diagonal K_κ and K_κ' at once via 3-point Gauss (degree 2,
+/// O(h³) per panel). Pass `kappa = 0.0` for the Laplace kernel G_0.
+pub fn k_and_kprime_off(
+    observer: DVec3,
+    tri: [DVec3; 3],
+    nb: DVec3,
+    ab: f64,
+    kappa: f64,
+) -> (f64, f64) {
+    accumulate_kernel(&gauss3_points(tri), observer, nb, ab, kappa)
+}
+
+/// 7-point Dunavant version of [`k_and_kprime_off`] for near-singular
+/// pairs. Each near-field entry computed with the coarser 3-point rule
+/// has enough O(h³) error to push GMRES iteration counts sharply up on
+/// heterogeneous protein meshes; 7-point (degree 5, O(h⁶)) restores
+/// pygbe-level convergence — their `K_fine = 19` parameter serves the
+/// same purpose.
+pub fn k_and_kprime_near(
+    observer: DVec3,
+    tri: [DVec3; 3],
+    nb: DVec3,
+    ab: f64,
+    kappa: f64,
+) -> (f64, f64) {
+    accumulate_kernel(&gauss7_points(tri), observer, nb, ab, kappa)
+}
+
+/// Shared quadrature accumulator for both rules. The κ = 0 branch
+/// skips the `exp()` and `κr + 1` factors — the Laplace block of the
+/// Juffer system has κ = 0 by construction, and profiling measured
+/// `libm::exp` at ~39 % of solve wall time before this branch.
+fn accumulate_kernel(
+    points: &[(DVec3, f64)],
+    observer: DVec3,
+    nb: DVec3,
+    ab: f64,
+    kappa: f64,
+) -> (f64, f64) {
+    let mut acc_k = 0.0;
+    let mut acc_kp = 0.0;
+    if kappa == 0.0 {
+        for &(p, w) in points {
+            let d = observer - p;
+            let r = d.length();
+            acc_k += w / r;
+            acc_kp += w * d.dot(nb) / (r * r * r);
+        }
+    } else {
+        for &(p, w) in points {
+            let d = observer - p;
+            let r = d.length();
+            let exp_kr = (-kappa * r).exp();
+            acc_k += w * exp_kr / r;
+            acc_kp += w * kappa.mul_add(r, 1.0) * exp_kr * d.dot(nb) / (r * r * r);
+        }
+    }
+    let s = ab / FOUR_PI;
+    (acc_k * s, acc_kp * s)
 }
 
 /// Self-panel K_κ = ∫_T G_κ(p, s') dS' at the panel centroid `p`.
@@ -155,19 +139,20 @@ pub fn k_self(tri: [DVec3; 3], centroid: DVec3, kappa: f64) -> f64 {
     }
     let area = 0.5 * (tri[1] - tri[0]).cross(tri[2] - tri[0]).length();
     let mut corr = 0.0;
-    for p in gauss3_points(tri) {
+    for (p, w) in gauss3_points(tri) {
         let r = (centroid - p).length();
         // why: (exp(−κr) − 1)/r is analytic at r = 0 with limit −κ; guard
         // the Gauss point that may coincide with the centroid (it doesn't
         // for the (2/3, 1/6, 1/6) rule — centroid has barycentric (1/3)³ —
         // but f64 cancellation could still produce tiny r).
-        corr += if r > 1e-14 {
+        let integrand = if r > 1e-14 {
             (-kappa * r).exp_m1() / r
         } else {
             -kappa
         };
+        corr += w * integrand;
     }
-    k0 + corr * area / (3.0 * FOUR_PI)
+    k0 + corr * area / FOUR_PI
 }
 
 /// Wilton–Rao–Glisson closed form for `∫_T 1/(4π|p − s'|) dS'` with `p` in

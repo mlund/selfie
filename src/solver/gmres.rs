@@ -61,9 +61,6 @@ pub(super) fn solve(op: BemOperator<'_>, rhs: Vec<f64>) -> Result<Vec<f64>> {
         reason: e.to_string(),
     })?;
     log::info!("GMRES: {iters} iterations, final relative residual {residual:.3e}");
-    if std::env::var_os("SELFIE_TRACE").is_some() {
-        eprintln!("[trace] GMRES converged in {iters} iterations, residual {residual:.3e}");
-    }
 
     let out = x.col_as_slice(0).to_vec();
     if let Some(i) = out.iter().position(|v| !v.is_finite()) {
