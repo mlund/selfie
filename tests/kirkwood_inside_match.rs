@@ -58,6 +58,15 @@ fn convergence_to_kirkwood_inside() {
         "Inside-charge acceptance failed: rel. err at n_t = 1280 is {:.3e} (need < 1 %)",
         rel_1280
     );
+
+    // why: same O(h²) rate check as the salt-bridge test — catch
+    // any regression from centroid collocation to O(h).
+    let rate_coarse = errors[0].1 / errors[1].1;
+    let rate_fine = errors[1].1 / errors[2].1;
+    assert!(
+        rate_coarse > 3.0 && rate_fine > 3.0,
+        "convergence too slow: {rate_coarse:.2}, {rate_fine:.2}"
+    );
 }
 
 #[test]
