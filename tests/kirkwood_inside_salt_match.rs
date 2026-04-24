@@ -105,8 +105,8 @@ fn reproduces_pygbe_sphere_example_geometry() {
     );
     eprintln!(
         "pygbe sphere geometry: U_self = {reference:.6e} e²/Å \
-         = {:.3} kcal/mol",
-        selfie::units::to_kcal_per_mol(reference)
+         = {:.3} kJ/mol",
+        selfie::units::to_kJ_per_mol(reference)
     );
 
     let bem = bem_solvation_with(&p, 7, &charges);

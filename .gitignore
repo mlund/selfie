@@ -2,3 +2,13 @@
 /bem_pb_plan.md
 /.bem_pb_plan.md.swp
 CLAUDE.md
+
+# Python tooling
+/.venv
+/.pytest_cache
+/.ruff_cache
+__pycache__/
+*.egg-info/
+*.pyc
+*.so
+*.pyd

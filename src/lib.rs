@@ -8,10 +8,12 @@ mod error;
 mod geometry;
 pub mod io;
 mod linear_response;
+#[cfg(feature = "python")]
+mod python;
 mod solver;
 
-// why: units exposes conversion helpers (kcal/mol, kT) that callers reach
-// through `selfie::units::to_kcal_per_mol` etc. Keeping the core type
+// why: units exposes conversion helpers (kJ/mol, kT) that callers reach
+// through `selfie::units::to_kJ_per_mol` etc. Keeping the core type
 // [`Dielectric`] re-exported at the crate root for convenience while leaving
 // conversions namespaced preserves the "few public nouns" principle.
 pub mod units;

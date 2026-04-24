@@ -18,10 +18,12 @@
 #![cfg(feature = "validation")]
 
 use selfie::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
-use selfie::units::to_kcal_per_mol;
+use selfie::units::to_kJ_per_mol;
 use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 
-const PYGBE_E_SOLV_KCAL: f64 = -13.458119761457832;
+// pygbe's reference solvation energy for this geometry, in kJ/mol
+// (originally -13.458119761457832 kcal/mol, scaled by 4.184 J/cal).
+const PYGBE_E_SOLV_KJ: f64 = -56.294777697138567;
 
 #[test]
 fn bem_matches_pygbe_sphere_result_at_equivalent_mesh() {
@@ -42,18 +44,18 @@ fn bem_matches_pygbe_sphere_result_at_equivalent_mesh() {
     let sol =
         BemSolution::solve(&surface, media, ChargeSide::Interior, &positions, &values).unwrap();
     let u = 0.5 * values[0] * sol.reaction_field_at(positions[0]);
-    let u_kcal = to_kcal_per_mol(u);
+    let u_kj = to_kJ_per_mol(u);
 
-    let rel_vs_pygbe = (u_kcal - PYGBE_E_SOLV_KCAL).abs() / PYGBE_E_SOLV_KCAL.abs();
+    let rel_vs_pygbe = (u_kj - PYGBE_E_SOLV_KJ).abs() / PYGBE_E_SOLV_KJ.abs();
     let rel_vs_analytical = (u - analytical).abs() / analytical.abs();
     eprintln!(
-        "Analytical:   {:+.4} kcal/mol\n\
-         pygbe (512):  {:+.4} kcal/mol\n\
-         selfie (500): {:+.4} kcal/mol  \
+        "Analytical:   {:+.4} kJ/mol\n\
+         pygbe (512):  {:+.4} kJ/mol\n\
+         selfie (500): {:+.4} kJ/mol  \
          (vs pygbe: {:.2e}, vs analytical: {:.2e})",
-        to_kcal_per_mol(analytical),
-        PYGBE_E_SOLV_KCAL,
-        u_kcal,
+        to_kJ_per_mol(analytical),
+        PYGBE_E_SOLV_KJ,
+        u_kj,
         rel_vs_pygbe,
         rel_vs_analytical
     );

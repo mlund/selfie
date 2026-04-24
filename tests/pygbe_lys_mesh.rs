@@ -17,7 +17,7 @@
 #![cfg(feature = "validation")]
 
 use selfie::io::{Charges, read_msms, read_pqr};
-use selfie::units::to_kcal_per_mol;
+use selfie::units::to_kJ_per_mol;
 use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 use std::path::PathBuf;
 
@@ -80,7 +80,7 @@ fn lysozyme_single_surface_pipeline() {
 #[test]
 #[ignore]
 fn lysozyme_full_solve() {
-    const PYGBE_ESOLV_SINGLE_LYS1_KCAL: f64 = -2401.2 / 4.184;
+    const PYGBE_ESOLV_SINGLE_LYS1_KJ: f64 = -2401.2;
     const REL_TOL: f64 = 0.05;
 
     let (surface, charges) = load_lysozyme();
@@ -111,15 +111,12 @@ fn lysozyme_full_solve() {
         })
         .sum::<f64>()
         * 0.5;
-    let e_solv_kcal = to_kcal_per_mol(e_solv_reduced);
-    let rel_err =
-        (e_solv_kcal - PYGBE_ESOLV_SINGLE_LYS1_KCAL).abs() / PYGBE_ESOLV_SINGLE_LYS1_KCAL.abs();
+    let e_solv_kj = to_kJ_per_mol(e_solv_reduced);
+    let rel_err = (e_solv_kj - PYGBE_ESOLV_SINGLE_LYS1_KJ).abs() / PYGBE_ESOLV_SINGLE_LYS1_KJ.abs();
     eprintln!(
-        "E_solv (Lys1 single-surface): ours = {:+.2} kcal/mol, \
-         pygbe = {:+.2} kcal/mol, rel. err = {:.2}%",
-        e_solv_kcal,
-        PYGBE_ESOLV_SINGLE_LYS1_KCAL,
-        rel_err * 100.0,
+        "E_solv (Lys1 single-surface): ours = {:+.2} kJ/mol, \
+         pygbe = {:+.2} kJ/mol, rel. err = {:.2}%",
+        e_solv_kj, PYGBE_ESOLV_SINGLE_LYS1_KJ, rel_err * 100.0,
     );
     assert!(
         rel_err < REL_TOL,

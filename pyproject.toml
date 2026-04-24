@@ -1,0 +1,43 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "selfie"
+description = "Boundary-element solver for the linearised Poisson–Boltzmann equation."
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+readme = "README.md"
+dynamic = ["version"]
+dependencies = ["numpy>=1.23"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Intended Audience :: Science/Research",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.8"]
+
+[project.urls]
+Repository = "https://github.com/mlund/selfie"
+
+[tool.maturin]
+features = ["python"]
+module-name = "selfie._selfie"
+python-source = "python"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "NPY"]
+# `to_kJ_per_mol` intentionally mixed-case to match the physical unit name.
+ignore = ["N802", "N806"]
+
+[tool.ruff.format]
+quote-style = "double"

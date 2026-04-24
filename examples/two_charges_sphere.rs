@@ -1,10 +1,10 @@
 //! Two unit charges inside a low-dielectric sphere in water (ε_in = 2,
 //! ε_out = 80, κ = 0) — the canonical MC-pKa titration setup in miniature.
 //! Prints the reaction-field contribution to the pair interaction energy
-//! in reduced units, kcal/mol, and kT, and compares against the classical
+//! in reduced units, kJ/mol, and kT, and compares against the classical
 //! Kirkwood 1934 interior-charge analytical reference.
 
-use selfie::units::{to_kcal_per_mol, to_kt};
+use selfie::units::{to_kJ_per_mol, to_kt};
 use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 
 #[cfg(feature = "validation")]
@@ -49,8 +49,8 @@ fn main() {
     println!();
     println!("W_12 (reaction field) = {w12_rf:+.6e} e²/Å");
     println!(
-        "                      = {:+.3} kcal/mol",
-        to_kcal_per_mol(w12_rf)
+        "                      = {:+.3} kJ/mol",
+        to_kJ_per_mol(w12_rf)
     );
     println!(
         "                      = {:+.3} kT (at 298.15 K)",

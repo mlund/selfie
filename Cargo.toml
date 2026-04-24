@@ -3,11 +3,18 @@ name = "selfie"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+# `rlib` for plain Rust consumers; `cdylib` so maturin can produce a
+# loadable Python extension from the same crate.
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = []
 # Compile the Kirkwood analytical reference (otherwise gated to #[cfg(test)]).
 # Intended for benchmarks/examples that need the reference at runtime.
 validation = []
+# pyo3 bindings (opt-in; Rust-only consumers never pull pyo3 or numpy).
+python = ["dep:pyo3", "dep:numpy"]
 
 [dependencies]
 faer = "0.24"
@@ -18,3 +25,5 @@ kdtree = "0.8"
 log = "0.4.29"
 rayon = "1.12.0"
 thiserror = "2"
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"], optional = true }
+numpy = { version = "0.28", optional = true }

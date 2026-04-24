@@ -5,6 +5,105 @@ written in Rust. Computes the electrostatic response of a protein (or any
 closed dielectric object) to a set of point charges, in a continuum-solvent
 model with optional salt screening.
 
+## Quick start
+
+Not yet on PyPI; install straight from the repository:
+
+```sh
+uv add "selfie @ git+https://github.com/mlund/selfie.git"
+# or, with plain pip:
+pip install "git+https://github.com/mlund/selfie.git"
+```
+
+The installer builds the native extension via `maturin`; no Rust toolchain
+on the user side is needed at install time if a prebuilt wheel is
+available, otherwise `cargo` is pulled in automatically.
+
+Minimal working example — a single unit charge at the centre of a
+dielectric sphere, compared against the Born closed form:
+
+```python
+import numpy as np
+import selfie as s
+
+surface = s.Surface.icosphere(radius=10.0, subdivisions=5)
+media = s.Dielectric(eps_in=2.0, eps_out=80.0)
+
+positions = np.array([[0.0, 0.0, 0.0]])
+charges = np.array([1.0])
+sol = s.BemSolution.solve(surface, media, s.ChargeSide.Interior, positions, charges)
+
+u_born = 0.5 * charges[0] * sol.reaction_field_at((0.0, 0.0, 0.0))
+print(f"Born solvation energy: {s.to_kJ_per_mol(u_born):.2f} kJ/mol")
+```
+
+## Usage
+
+### Solving on a pre-built mesh
+
+`Surface.from_msms` reads the standard MSMS `.vert` / `.face` pair;
+`read_pqr` loads atom charges. `classify_charges` detects which side
+of the dielectric boundary the atoms live on, so you don't have to
+hard-code it.
+
+```python
+import selfie as s
+
+surface = s.Surface.from_msms("Lys1.vert", "Lys1.face")
+positions, charges = s.read_pqr("built_parse.pqr")
+side = surface.classify_charges(positions)
+
+media = s.Dielectric(eps_in=4.0, eps_out=80.0, kappa=0.125)  # physiological salt
+sol = s.BemSolution.solve(surface, media, side, positions, charges)
+```
+
+### Solvation energy of a protein
+
+```python
+import numpy as np
+import selfie as s
+
+# E_solv = ½ Σ_j q_j · φ_rf(r_j), summed over all source charges.
+phi = sol.reaction_field_at_many(positions)
+e_solv_reduced = 0.5 * np.dot(charges, phi)
+print(f"E_solv = {s.to_kJ_per_mol(e_solv_reduced):.2f} kJ/mol")
+```
+
+### Many charge configurations over the same mesh
+
+When you need to evaluate the solver repeatedly over the *same* mesh
+with *different* charges (binding-energy scans, pKa shifts, sensitivity
+studies), precompute the linear-response basis once and turn every
+downstream query into dense linear algebra:
+
+```python
+basis = s.LinearResponse.precompute(surface, media, side, sites=positions)
+
+q1 = charges
+q2 = charges.copy()
+q2[0] += 1.0   # flip one site's protonation
+
+e1 = basis.solvation_energy(q1)
+e2 = basis.solvation_energy(q2)
+print(f"ΔE_solv = {s.to_kJ_per_mol(e2 - e1):.2f} kJ/mol")
+```
+
+The precompute cost is `N_sites` full BEM solves; every later
+`solvation_energy` call is `O(N_sites²)` flops — microseconds even at
+hundreds of sites.
+
+### Reaction field on a grid
+
+For visualisation or post-hoc analysis, sample the reaction field at
+arbitrary probe points:
+
+```python
+import numpy as np
+
+probe = np.array([[0.0, 0.0, z] for z in np.linspace(-10, 10, 21)])
+phi_rf = sol.reaction_field_at_many(probe)
+```
+
 ## Overview
 
 Given:
@@ -98,7 +197,7 @@ All public quantities are in reduced electrostatic units:
 | energy    | e² / Å |
 | inverse Debye length | Å⁻¹ |
 
-A helper is provided to convert energies to kcal/mol.
+A helper is provided to convert energies to kJ/mol.
 
 ## Validation
 

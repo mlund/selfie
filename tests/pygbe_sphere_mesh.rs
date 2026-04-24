@@ -6,15 +6,16 @@
 //! solvation energy to pygbe's stored regression:
 //!
 //!     pygbe/tests/sphere.pickle  →  E_solv = −13.458119761457832 kcal/mol
+//!                                           = −56.294777697... kJ/mol
 
 #![cfg(feature = "validation")]
 
 use selfie::io::{read_msms, read_pqr};
-use selfie::units::to_kcal_per_mol;
+use selfie::units::to_kJ_per_mol;
 use selfie::{BemSolution, Dielectric, Surface};
 use std::path::PathBuf;
 
-const PYGBE_E_SOLV_KCAL: f64 = -13.458119761457832;
+const PYGBE_E_SOLV_KJ: f64 = -56.294777697138567;
 
 fn test_data(sub: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -53,12 +54,12 @@ fn bem_reproduces_pygbe_sphere_via_file_io() {
             .zip(&phi)
             .map(|(&q, &p)| q * p)
             .sum::<f64>();
-    let u_kcal = to_kcal_per_mol(u);
+    let u_kj = to_kJ_per_mol(u);
 
-    let rel = (u_kcal - PYGBE_E_SOLV_KCAL).abs() / PYGBE_E_SOLV_KCAL.abs();
+    let rel = (u_kj - PYGBE_E_SOLV_KJ).abs() / PYGBE_E_SOLV_KJ.abs();
     eprintln!(
-        "file I/O + BEM: U_solv = {u_kcal:+.4} kcal/mol  \
-         (pygbe: {PYGBE_E_SOLV_KCAL:+.4}, rel = {rel:.3e})"
+        "file I/O + BEM: U_solv = {u_kj:+.4} kJ/mol  \
+         (pygbe: {PYGBE_E_SOLV_KJ:+.4}, rel = {rel:.3e})"
     );
     assert!(rel < 5e-3, "selfie vs pygbe: rel.err = {rel:.3e}");
 }
