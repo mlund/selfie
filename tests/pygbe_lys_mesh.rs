@@ -21,19 +21,27 @@ use selfie::units::to_kJ_per_mol;
 use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 use std::path::PathBuf;
 
-fn fixture(sub: &str) -> PathBuf {
+mod common;
+
+fn charge_fixture() -> PathBuf {
+    // PQR stays in the repo — not part of the pygbe mesh archive.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/pygbe_lys")
-        .join(sub)
+        .join("tests/data/pygbe_lys/built_parse.pqr")
+}
+
+fn load_lysozyme_at(resolution: &str) -> (Surface, Charges) {
+    let dir = common::pygbe_lysozyme_dir();
+    let vert = dir.join(format!("Lys{resolution}.vert"));
+    let face = dir.join(format!("Lys{resolution}.face"));
+    let (vertices, faces) = read_msms(&vert, &face).expect("read_msms");
+    let surface = Surface::from_mesh(&vertices, &faces)
+        .expect("lysozyme mesh should be a closed orientable 2-manifold");
+    let charges = read_pqr(charge_fixture()).expect("read_pqr");
+    (surface, charges)
 }
 
 fn load_lysozyme() -> (Surface, Charges) {
-    let (vertices, faces) =
-        read_msms(fixture("Lys1.vert"), fixture("Lys1.face")).expect("read_msms");
-    let surface = Surface::from_mesh(&vertices, &faces)
-        .expect("Lys1 mesh should be a closed orientable 2-manifold");
-    let charges = read_pqr(fixture("built_parse.pqr")).expect("read_pqr");
-    (surface, charges)
+    load_lysozyme_at("1")
 }
 
 #[test]
@@ -124,4 +132,86 @@ fn lysozyme_full_solve() {
         rel_err * 100.0,
         REL_TOL * 100.0,
     );
+}
+
+fn solve_and_report(label: &str, surface: &Surface, charges: &Charges) -> f64 {
+    let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
+    let t = std::time::Instant::now();
+    let sol = BemSolution::solve(
+        surface,
+        media,
+        ChargeSide::Interior,
+        &charges.positions,
+        &charges.values,
+    )
+    .expect("GMRES should converge");
+    let elapsed = t.elapsed().as_secs_f64();
+    let e_solv_reduced: f64 = (0..charges.values.len())
+        .map(|j| {
+            sol.interaction_energy(&charges.positions, &charges.values, j, j)
+                .expect("interaction_energy")
+        })
+        .sum::<f64>()
+        * 0.5;
+    let e_solv_kj = to_kJ_per_mol(e_solv_reduced);
+    eprintln!(
+        "{label}: {} faces, elapsed {elapsed:.1}s, E_solv = {e_solv_kj:+.2} kJ/mol",
+        surface.num_faces()
+    );
+    e_solv_kj
+}
+
+/// Mesh-refinement gate on the real-protein path. Walks pygbe's
+/// published `Lys{1,2,4,8}` single-surface convergence series and
+/// checks our E_solv against their stored references (from
+/// `pygbe/tests/convergence_tests/lysozyme.py`). `#[ignore]`-gated
+/// because the Lys8 solve is ~25 s on a laptop.
+///
+/// pygbe reference values (`lys.param`, interior charges, ε_in = 4,
+/// ε_out = 80, κ = 0.125 Å⁻¹):
+///   Lys1 → −2401.2 kJ/mol  (14 398 faces)
+///   Lys2 → −2161.8 kJ/mol  (~30 k faces)
+///   Lys4 → −2089.0 kJ/mol  (~50 k faces)
+///   Lys8 → −2065.5 kJ/mol  (~81 k faces)
+///
+/// The series converges from above — as the mesh refines the
+/// surface approaches the SES limit and E_solv settles toward
+/// ≈ −2050 kJ/mol. We check each resolution against pygbe to
+/// ≤ 2 % (own MSMS artifacts + BEM order limit the absolute
+/// match), and assert the monotone-convergence pattern.
+#[test]
+#[ignore]
+fn lysozyme_mesh_refinement_matches_pygbe_series() {
+    // Reference values from pygbe's convergence_tests/lysozyme.py
+    // (`Esolv_ref_single`), in kJ/mol.
+    const REFERENCES: [(&str, f64); 4] = [
+        ("Lys1", -2401.2),
+        ("Lys2", -2161.8),
+        ("Lys4", -2089.0),
+        ("Lys8", -2065.5),
+    ];
+    let mut ours = Vec::with_capacity(REFERENCES.len());
+    for (label, ref_kj) in &REFERENCES {
+        let (surface, charges) = load_lysozyme_at(&label[3..]);
+        let e_kj = solve_and_report(label, &surface, &charges);
+        let rel = (e_kj - ref_kj).abs() / ref_kj.abs();
+        eprintln!("  pygbe = {ref_kj:+.2} kJ/mol, rel = {:.2}%", rel * 100.0);
+        assert!(
+            rel < 0.02,
+            "{label}: rel.err vs pygbe {:.2}% > 2 %",
+            rel * 100.0
+        );
+        ours.push(e_kj);
+    }
+    // why: the published pygbe series is monotone (each refinement
+    // steps E_solv *up* toward the continuum limit). Our series
+    // should exhibit the same pattern — if some refinement ever
+    // reverses direction, something about the BEM or the mesh
+    // handling has regressed.
+    for pair in ours.windows(2) {
+        assert!(
+            pair[1] > pair[0] - 1.0,
+            "non-monotone convergence: {pair:?} kJ/mol"
+        );
+    }
 }

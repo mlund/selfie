@@ -16,18 +16,17 @@ use selfie::{BemSolution, ChargeSide, Dielectric, LinearResponse, Surface};
 use std::path::PathBuf;
 use std::time::Instant;
 
-fn fixture(sub: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/pygbe_lys")
-        .join(sub)
-}
+mod common;
 
 #[test]
 #[ignore]
 fn lysozyme_basis_matches_direct_solve() {
-    let (vertices, faces) = read_msms(fixture("Lys1.vert"), fixture("Lys1.face")).unwrap();
+    let dir = common::pygbe_lysozyme_dir();
+    let (vertices, faces) = read_msms(dir.join("Lys1.vert"), dir.join("Lys1.face")).unwrap();
     let surface = Surface::from_mesh(&vertices, &faces).unwrap();
-    let charges = read_pqr(fixture("built_parse.pqr")).unwrap();
+    let charge_pqr: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/pygbe_lys/built_parse.pqr");
+    let charges = read_pqr(&charge_pqr).unwrap();
     let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
 
     // why: five atom positions spread across the lysozyme structure;

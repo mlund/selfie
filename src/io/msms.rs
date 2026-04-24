@@ -25,6 +25,26 @@ pub fn read_msms(vert_path: impl AsRef<Path>, face_path: impl AsRef<Path>) -> Re
     let raw_vertices = read_vert(vert_path.as_ref())?;
     let raw_faces = read_face(face_path.as_ref(), raw_vertices.len())?;
     let (vertices, faces) = dedup_vertices(raw_vertices, raw_faces);
+    // why: MSMS output occasionally contains a degenerate triangle
+    // whose three vertex indices don't name three distinct points
+    // — most commonly when two vertex rows in `.vert` have
+    // bit-identical coordinates (seen on the pygbe lysozyme Lys8
+    // mesh at one near-cone point) and the dedup pass collapses
+    // them, leaving a face that references the same physical
+    // vertex twice. Filtering those out here yields the same
+    // topology pygbe uses, since a zero-area triangle contributes
+    // nothing to the BEM integrals anyway.
+    let n_before = faces.len();
+    let faces: Vec<[u32; 3]> = faces
+        .into_iter()
+        .filter(|[a, b, c]| a != b && b != c && a != c)
+        .collect();
+    if faces.len() < n_before {
+        log::info!(
+            "MSMS mesh: dropped {} degenerate face(s) with coincident vertex indices",
+            n_before - faces.len()
+        );
+    }
     log::info!(
         "MSMS mesh loaded: {} vertices, {} faces",
         vertices.len(),
