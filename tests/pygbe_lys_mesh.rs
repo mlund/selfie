@@ -5,14 +5,11 @@
 //! no internal cavities) against bulk water at κ = 0.125 Å⁻¹ — exactly
 //! our physics setup. The Lys1 mesh has 14,398 faces (28,796 unknowns).
 //!
-//! Two tests here:
-//!
-//! - [`lysozyme_single_surface_pipeline`]: fast I/O + geometry-sanity
-//!   pipeline on a realistic workload. Runs by default under
-//!   `--features validation`.
-//! - [`lysozyme_full_solve`]: end-to-end GMRES solve. `#[ignore]`'d so
-//!   it stays out of default `cargo test`; run with
-//!   `cargo test --release --features validation -- --ignored`.
+//! All tests here depend on the pygbe mesh archive (Zenodo record
+//! 55349), which [`tests/common`] fetches on demand into a local
+//! cache. Because of that network prerequisite all tests in this
+//! file are `#[ignore]`'d; run with
+//! `cargo test --release --features validation -- --ignored`.
 
 #![cfg(feature = "validation")]
 
@@ -44,7 +41,11 @@ fn load_lysozyme() -> (Surface, Charges) {
     load_lysozyme_at("1")
 }
 
+/// `#[ignore]`-gated because it now fetches the pygbe mesh archive
+/// from Zenodo on first use (≈9 MB). Kept as a coarse sanity check
+/// — no GMRES solve, just load + classify — for opt-in runs.
 #[test]
+#[ignore]
 fn lysozyme_single_surface_pipeline() {
     let (surface, charges) = load_lysozyme();
     // MSMS dedup: Lys1 ships shared-vertex (not triangle-soup), so the
