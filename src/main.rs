@@ -82,7 +82,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
-            if let Error::MixedChargeSides { .. } = e {
+            if matches!(e, Error::MixedChargeSides { .. }) {
                 eprintln!("hint: pass `--side interior` or `--side exterior` to override.");
             }
             ExitCode::FAILURE
@@ -152,9 +152,10 @@ fn load_atoms(path: &Path, override_format: Option<InputFormat>) -> Result<Atoms
 }
 
 fn detect_format(path: &Path) -> Option<InputFormat> {
-    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase) {
-        Some(ref ext) if ext == "pqr" => Some(InputFormat::Pqr),
-        Some(ref ext) if ext == "xyz" => Some(InputFormat::Xyz),
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "pqr" => Some(InputFormat::Pqr),
+        "xyz" => Some(InputFormat::Xyz),
         _ => None,
     }
 }
