@@ -13,7 +13,7 @@ readme = "README.md"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["mesh"]
+default = ["mesh", "cli"]
 # Pure-Rust molecular-surface mesher (Gaussian density + marching cubes) for
 # turning a list of atom positions/radii into a closed triangulated surface.
 # On by default; disable with `default-features = false` for a leaner build.

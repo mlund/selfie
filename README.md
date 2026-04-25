@@ -51,7 +51,7 @@ import selfie as s
 
 positions, charges, radii = s.read_pqr("protein.pqr")
 
-surface = s.Surface.from_atoms_gaussian(positions, radii, grid_spacing=0.5)
+surface = s.Surface.from_atoms_gaussian(positions, radii, grid_spacing=1.5)
 side = surface.classify_charges(positions)
 
 media = s.Dielectric(eps_in=4.0, eps_out=80.0, kappa=0.125)  # physiological salt

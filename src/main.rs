@@ -30,7 +30,7 @@ struct Cli {
     format: Option<InputFormat>,
 
     /// Marching-cubes grid spacing in Å (smaller = finer mesh, quadratic memory).
-    #[arg(long, default_value_t = 0.5)]
+    #[arg(long, default_value_t = 1.5)]
     grid_spacing: f64,
 
     /// Write the meshed surface as Wavefront OBJ.
