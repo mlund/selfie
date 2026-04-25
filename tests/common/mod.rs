@@ -60,7 +60,10 @@ fn cache_root() -> PathBuf {
         return PathBuf::from(override_path);
     }
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".cache").join("selfie").join("pygbe_meshes");
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("selfie")
+            .join("pygbe_meshes");
     }
     // Last-resort fallback: inside the Cargo target dir. Survives cargo
     // build but not `cargo clean`.
@@ -103,7 +106,9 @@ fn try_ensure_pygbe_archive_extracted() -> Result<PathBuf, String> {
         return Err(format!("unzip exited with {status}"));
     }
     if !marker.exists() {
-        return Err(format!("archive did not contain expected marker {marker:?}"));
+        return Err(format!(
+            "archive did not contain expected marker {marker:?}"
+        ));
     }
     Ok(cache)
 }

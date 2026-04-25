@@ -58,12 +58,7 @@ pub(super) fn block_entries_laplace(geom: &FaceGeoms, a: usize, b: usize) -> (f6
 /// Yukawa-only `(K_κ, K'_κ)` block entries. Debug-asserts `κ > 0`;
 /// for `κ = 0` the result would duplicate [`block_entries_laplace`],
 /// and the treecode only invokes this path when screening is active.
-pub(super) fn block_entries_yukawa(
-    geom: &FaceGeoms,
-    a: usize,
-    b: usize,
-    kappa: f64,
-) -> (f64, f64) {
+pub(super) fn block_entries_yukawa(geom: &FaceGeoms, a: usize, b: usize, kappa: f64) -> (f64, f64) {
     debug_assert!(kappa > 0.0);
     let ca = geom.centroids[a];
     if a == b {

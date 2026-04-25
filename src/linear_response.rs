@@ -234,7 +234,6 @@ impl<'s> LinearResponse<'s> {
             });
         Ok(())
     }
-
 }
 
 #[cfg(test)]
@@ -391,11 +390,7 @@ mod tests {
         let q2 = vec![-0.6, 0.5, 0.7, -0.2, 0.1];
         let lambda = 1.7_f64;
         let probe = [0.1, 0.2, -0.3];
-        let combined: Vec<f64> = q1
-            .iter()
-            .zip(&q2)
-            .map(|(a, b)| lambda * a + b)
-            .collect();
+        let combined: Vec<f64> = q1.iter().zip(&q2).map(|(a, b)| lambda * a + b).collect();
         let phi_combined = basis.reaction_field_at(&combined, probe).unwrap();
         let phi_q1 = basis.reaction_field_at(&q1, probe).unwrap();
         let phi_q2 = basis.reaction_field_at(&q2, probe).unwrap();
@@ -415,13 +410,9 @@ mod tests {
         // noted in the tests module doc.
         let surface = unit_icosphere();
         let sites = sample_sites();
-        let basis = LinearResponse::precompute(
-            &surface,
-            sample_media(),
-            ChargeSide::Interior,
-            &sites,
-        )
-        .unwrap();
+        let basis =
+            LinearResponse::precompute(&surface, sample_media(), ChargeSide::Interior, &sites)
+                .unwrap();
         let q = vec![0.7, -0.3, 0.5, -0.2, 0.8];
         let n = basis.num_sites();
         let mut via_g = vec![0.0; n];
@@ -432,7 +423,10 @@ mod tests {
             .unwrap();
         for (j, (&a, &b)) in via_g.iter().zip(&via_quad).enumerate() {
             let rel = (a - b).abs() / a.abs().max(b.abs()).max(1e-12);
-            assert!(rel < 1e-3, "site {j}: via_g = {a:e}, via_quad = {b:e}, rel = {rel:e}");
+            assert!(
+                rel < 1e-3,
+                "site {j}: via_g = {a:e}, via_quad = {b:e}, rel = {rel:e}"
+            );
         }
     }
 

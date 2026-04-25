@@ -258,12 +258,7 @@ impl ShExpansion {
         let s = irregular_solid_harmonic(r - self.center);
         let mut sum_single = c64::default();
         let mut sum_double = c64::default();
-        for ((&cs, &cd), &sn) in self
-            .coeffs
-            .iter()
-            .zip(&self.double_coeffs)
-            .zip(s.iter())
-        {
+        for ((&cs, &cd), &sn) in self.coeffs.iter().zip(&self.double_coeffs).zip(s.iter()) {
             sum_single += cs * sn;
             sum_double += cd * sn;
         }

@@ -22,8 +22,7 @@ mod common;
 
 fn charge_fixture() -> PathBuf {
     // PQR stays in the repo — not part of the pygbe mesh archive.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/pygbe_lys/built_parse.pqr")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/pygbe_lys/built_parse.pqr")
 }
 
 fn load_lysozyme_at(resolution: &str) -> (Surface, Charges) {
@@ -125,7 +124,9 @@ fn lysozyme_full_solve() {
     eprintln!(
         "E_solv (Lys1 single-surface): ours = {:+.2} kJ/mol, \
          pygbe = {:+.2} kJ/mol, rel. err = {:.2}%",
-        e_solv_kj, PYGBE_ESOLV_SINGLE_LYS1_KJ, rel_err * 100.0,
+        e_solv_kj,
+        PYGBE_ESOLV_SINGLE_LYS1_KJ,
+        rel_err * 100.0,
     );
     assert!(
         rel_err < REL_TOL,

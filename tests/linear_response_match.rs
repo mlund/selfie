@@ -24,13 +24,9 @@ fn matches_born_at_kappa_zero() {
     // existing `tests/born_match.rs` achieves with BemSolution.
     let surface = Surface::icosphere(A, 7);
     let media = Dielectric::continuum(EPS_IN, EPS_OUT);
-    let basis = LinearResponse::precompute(
-        &surface,
-        media,
-        ChargeSide::Interior,
-        &[[0.0, 0.0, 0.0]],
-    )
-    .unwrap();
+    let basis =
+        LinearResponse::precompute(&surface, media, ChargeSide::Interior, &[[0.0, 0.0, 0.0]])
+            .unwrap();
     let bem = basis.solvation_energy(&[1.0]).unwrap();
     let reference = born_self_energy(1.0, A, EPS_IN, EPS_OUT, 0.0);
     let rel = (bem - reference).abs() / reference.abs();
@@ -45,13 +41,9 @@ fn matches_debye_huckel_at_physiological_salt() {
     let kappa = 1.0 / 14.0;
     let surface = Surface::icosphere(A, 7);
     let media = Dielectric::continuum_with_salt(EPS_IN, EPS_OUT, kappa);
-    let basis = LinearResponse::precompute(
-        &surface,
-        media,
-        ChargeSide::Interior,
-        &[[0.0, 0.0, 0.0]],
-    )
-    .unwrap();
+    let basis =
+        LinearResponse::precompute(&surface, media, ChargeSide::Interior, &[[0.0, 0.0, 0.0]])
+            .unwrap();
     let bem = basis.solvation_energy(&[1.0]).unwrap();
     let reference = born_self_energy(1.0, A, EPS_IN, EPS_OUT, kappa);
     let rel = (bem - reference).abs() / reference.abs();
@@ -74,8 +66,7 @@ fn matches_kirkwood_inside_multipair() {
 
     let surface = Surface::icosphere(A, 7);
     let media = Dielectric::continuum(EPS_IN, EPS_OUT);
-    let basis =
-        LinearResponse::precompute(&surface, media, ChargeSide::Interior, &sites).unwrap();
+    let basis = LinearResponse::precompute(&surface, media, ChargeSide::Interior, &sites).unwrap();
     let bem = basis.solvation_energy(&charges).unwrap();
 
     let mut reference = 0.0;
@@ -110,14 +101,11 @@ fn matches_kirkwood_inside_salt_z_axis() {
 
     let surface = Surface::icosphere(A, 7);
     let media = Dielectric::continuum_with_salt(EPS_IN, EPS_OUT, kappa);
-    let basis =
-        LinearResponse::precompute(&surface, media, ChargeSide::Interior, &sites).unwrap();
+    let basis = LinearResponse::precompute(&surface, media, ChargeSide::Interior, &sites).unwrap();
     let bem = basis.solvation_energy(&values).unwrap();
     let reference = solvation_energy_z_axis(&charges_on_z, EPS_IN, EPS_OUT, A, A, kappa, 60);
 
     let rel = (bem - reference).abs() / reference.abs();
-    eprintln!(
-        "Kirkwood inside+salt: BEM = {bem:.9e}, ref = {reference:.9e}, rel = {rel:.3e}"
-    );
+    eprintln!("Kirkwood inside+salt: BEM = {bem:.9e}, ref = {reference:.9e}, rel = {rel:.3e}");
     assert!(rel < 0.02, "Kirkwood inside+salt: rel = {rel:.3e}");
 }

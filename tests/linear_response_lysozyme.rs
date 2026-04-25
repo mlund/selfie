@@ -24,8 +24,8 @@ fn lysozyme_basis_matches_direct_solve() {
     let dir = common::pygbe_lysozyme_dir();
     let (vertices, faces) = read_msms(dir.join("Lys1.vert"), dir.join("Lys1.face")).unwrap();
     let surface = Surface::from_mesh(&vertices, &faces).unwrap();
-    let charge_pqr: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/pygbe_lys/built_parse.pqr");
+    let charge_pqr: PathBuf =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/pygbe_lys/built_parse.pqr");
     let charges = read_pqr(&charge_pqr).unwrap();
     let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
 
@@ -38,8 +38,7 @@ fn lysozyme_basis_matches_direct_solve() {
     let q = [0.7_f64, -0.4, 0.5, -0.9, 0.3];
 
     let t = Instant::now();
-    let basis =
-        LinearResponse::precompute(&surface, media, ChargeSide::Interior, &sites).unwrap();
+    let basis = LinearResponse::precompute(&surface, media, ChargeSide::Interior, &sites).unwrap();
     let elapsed = t.elapsed().as_secs_f64();
     eprintln!(
         "LinearResponse::precompute: {} sites, {} faces, elapsed {:.1}s",
@@ -73,7 +72,9 @@ fn lysozyme_basis_matches_direct_solve() {
     let mut via_g = vec![0.0; 5];
     let mut via_quad = vec![0.0; 5];
     basis.reaction_field_at_sites(&q, &mut via_g).unwrap();
-    basis.reaction_field_at_many(&q, &sites, &mut via_quad).unwrap();
+    basis
+        .reaction_field_at_many(&q, &sites, &mut via_quad)
+        .unwrap();
     for (j, (&a, &b)) in via_g.iter().zip(&via_quad).enumerate() {
         let r = (a - b).abs() / a.abs().max(b.abs()).max(1e-12);
         assert!(r < 1e-3, "site {j}: via_g = {a}, via_quad = {b}, rel = {r}");

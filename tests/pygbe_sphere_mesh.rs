@@ -99,7 +99,9 @@ fn exterior_charge_on_pygbe_sphere_matches_kirkwood() {
     let reference = phi_rf_analytical(source, eval, a, eps_in, eps_out, 80);
 
     let rel = (bem - reference).abs() / reference.abs();
-    eprintln!("exterior on pygbe sphere: BEM = {bem:.9e}, Kirkwood = {reference:.9e}, rel = {rel:.3e}");
+    eprintln!(
+        "exterior on pygbe sphere: BEM = {bem:.9e}, Kirkwood = {reference:.9e}, rel = {rel:.3e}"
+    );
     // why: the pygbe sphere at 500 triangles is coarser than our
     // subdiv = 7 icosphere baseline (1280). The existing exterior-
     // Kirkwood gate at subdiv = 3 (n_t = 320) holds to < 5 %; keep
