@@ -4,12 +4,16 @@
 //! details, and the `hexasphere` adapter are hidden behind it.
 
 mod icosphere;
+#[cfg(feature = "mesh")]
+mod molecular_surface;
 pub(crate) mod panel;
 
 use crate::error::{Error, Result};
 use crate::units::ChargeSide;
 use glam::DVec3;
 use panel::FaceGeoms;
+use std::io::Write;
+use std::path::Path;
 
 /// A closed, outward-oriented triangulated boundary.
 ///
@@ -241,6 +245,59 @@ impl Surface {
     pub(crate) const fn geom_internal(&self) -> &FaceGeoms {
         &self.geom
     }
+
+    /// Build a closed Gaussian molecular surface around a set of weighted
+    /// spheres (positions + radii) using the marching-cubes algorithm on the
+    /// density `ρ(r) = Σᵢ exp(d · (1 − |r − rᵢ|² / Rᵢ²))` at isolevel 1.
+    ///
+    /// `grid_spacing` is in Å (typical 0.3–1.0; smaller is finer with
+    /// quadratic memory cost). Internal defaults: decay `d = 1.0`, isolevel
+    /// `1.0`, padding `2 Å` beyond the per-atom Gaussian cutoff. The result
+    /// is fed through [`Self::from_mesh`] for the standard manifold,
+    /// outward-normal, and degeneracy checks.
+    ///
+    /// `positions.len()` must equal `radii.len()`. All radii must be
+    /// positive and finite.
+    ///
+    /// # Errors
+    /// [`Error::AtomsLenMismatch`], [`Error::NonPositiveRadius`], or any of
+    /// the variants returned by [`Self::from_mesh`].
+    #[cfg(feature = "mesh")]
+    pub fn from_atoms_gaussian(
+        positions: &[[f64; 3]],
+        radii: &[f64],
+        grid_spacing: f64,
+    ) -> Result<Self> {
+        let (verts, faces) = molecular_surface::build_mesh(positions, radii, grid_spacing)?;
+        Self::from_mesh(&verts, &faces)
+    }
+
+    /// Write the mesh as a Wavefront `.obj` file. Loads natively in PyMOL
+    /// (`cmd.load("mesh.obj")`), VMD (stock plugins), MeshLab, and Blender.
+    ///
+    /// Vertices are written one per line as `v x y z`; faces as `f i j k`
+    /// with 1-based indices, in the same winding order maintained by
+    /// `Surface`'s invariants (CCW from outside ⇒ outward normals).
+    ///
+    /// # Errors
+    /// [`Error::Io`] on filesystem failure.
+    pub fn write_obj(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let io_err = |e: std::io::Error| Error::Io {
+            path: path.display().to_string(),
+            reason: e.to_string(),
+        };
+        let mut w = std::io::BufWriter::new(std::fs::File::create(path).map_err(io_err)?);
+        for v in &self.vertices {
+            writeln!(w, "v {} {} {}", v.x, v.y, v.z).map_err(io_err)?;
+        }
+        // OBJ uses 1-based indices.
+        for &[a, b, c] in &self.faces {
+            writeln!(w, "f {} {} {}", a + 1, b + 1, c + 1).map_err(io_err)?;
+        }
+        w.flush().map_err(io_err)?;
+        Ok(())
+    }
 }
 
 enum PointLocation {
@@ -425,5 +482,81 @@ mod tests {
         let mixed = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]];
         let r = s.classify_charges(&mixed);
         assert!(matches!(r, Err(Error::MixedChargeSides { .. })));
+    }
+
+    #[cfg(feature = "mesh")]
+    #[test]
+    fn from_atoms_gaussian_single_atom_is_outward_oriented_sphere() {
+        let s = Surface::from_atoms_gaussian(&[[0.0, 0.0, 0.0]], &[3.0], 0.4)
+            .expect("from_atoms_gaussian on isolated atom");
+        // from_mesh has already passed: manifold + outward + non-degenerate.
+        // Check area is within 10 % of 4πR² (marching-cubes truncation error
+        // is dominated by grid spacing on a curved surface).
+        let total: f64 = s.face_areas().iter().sum();
+        let expected = 4.0 * PI * 9.0;
+        let rel = (total - expected).abs() / expected;
+        assert!(rel < 0.10, "area rel.err {rel:e}");
+    }
+
+    #[cfg(feature = "mesh")]
+    #[test]
+    fn from_atoms_gaussian_two_overlapping_atoms_is_one_component() {
+        // Two spheres separated by 2 Å, each with R = 1.5 Å — overlap.
+        let s =
+            Surface::from_atoms_gaussian(&[[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[1.5, 1.5], 0.3)
+                .expect("from_atoms_gaussian on two overlapping atoms");
+
+        // BFS over face adjacency; expect every face to be reachable from face 0.
+        let n_faces = s.num_faces();
+        let mut adjacency: std::collections::HashMap<(u32, u32), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (face_idx, &[a, b, c]) in s.faces().iter().enumerate() {
+            for (u, v) in [(a, b), (b, c), (c, a)] {
+                let key = if u < v { (u, v) } else { (v, u) };
+                adjacency.entry(key).or_default().push(face_idx);
+            }
+        }
+        let mut seen = vec![false; n_faces];
+        let mut stack = vec![0_usize];
+        seen[0] = true;
+        while let Some(f) = stack.pop() {
+            let [a, b, c] = s.faces()[f];
+            for (u, v) in [(a, b), (b, c), (c, a)] {
+                let key = if u < v { (u, v) } else { (v, u) };
+                for &g in &adjacency[&key] {
+                    if !seen[g] {
+                        seen[g] = true;
+                        stack.push(g);
+                    }
+                }
+            }
+        }
+        assert!(
+            seen.iter().all(|&v| v),
+            "fused mesh has {} disconnected faces",
+            seen.iter().filter(|&&v| !v).count()
+        );
+    }
+
+    #[test]
+    fn write_obj_round_trips_vertex_and_face_counts() {
+        let s = Surface::icosphere(2.0, 1);
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("selfie_obj_test_{}.obj", std::process::id()));
+        s.write_obj(&path).expect("write_obj");
+        let content = std::fs::read_to_string(&path).expect("read back");
+        let n_v = content.lines().filter(|l| l.starts_with("v ")).count();
+        let n_f = content.lines().filter(|l| l.starts_with("f ")).count();
+        assert_eq!(n_v, s.num_vertices());
+        assert_eq!(n_f, s.num_faces());
+        // Spot-check a face line: 1-based indices, three integers.
+        let first_face = content.lines().find(|l| l.starts_with("f ")).unwrap();
+        let parts: Vec<&str> = first_face.split_whitespace().collect();
+        assert_eq!(parts.len(), 4);
+        for tok in &parts[1..] {
+            let n: u32 = tok.parse().expect("OBJ face index parses as integer");
+            assert!(n >= 1 && n <= s.num_vertices() as u32);
+        }
+        std::fs::remove_file(&path).ok();
     }
 }

@@ -198,6 +198,35 @@ impl PySurface {
         })
     }
 
+    /// Build a closed Gaussian molecular surface from atom positions and
+    /// radii using the in-tree marching-cubes mesher (no NanoShaper or
+    /// MSMS dependency).
+    ///
+    /// `positions` is `(N, 3) float64`, `radii` is `(N,) float64` with all
+    /// values positive and finite. `grid_spacing` is in Å (typical 0.3–1.0;
+    /// smaller is finer with quadratic memory cost).
+    #[cfg(feature = "mesh")]
+    #[staticmethod]
+    fn from_atoms_gaussian(
+        positions: PyReadonlyArray2<'_, f64>,
+        radii: PyReadonlyArray1<'_, f64>,
+        grid_spacing: f64,
+    ) -> PyResult<Self> {
+        let pos = positions_from_numpy(&positions)?;
+        let r = radii.as_slice()?;
+        let surface = Surface::from_atoms_gaussian(&pos, r, grid_spacing)?;
+        Ok(Self {
+            inner: Arc::new(surface),
+        })
+    }
+
+    /// Write the mesh as a Wavefront `.obj` file (PyMOL `cmd.load`,
+    /// VMD, MeshLab, Blender all accept this format).
+    fn write_obj(&self, path: &str) -> PyResult<()> {
+        self.inner.write_obj(path)?;
+        Ok(())
+    }
+
     #[getter]
     fn num_vertices(&self) -> usize {
         self.inner.num_vertices()

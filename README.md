@@ -39,6 +39,39 @@ print(f"Born solvation energy: {s.to_kJ_per_mol(u_born):.2f} kJ/mol")
 
 ## Usage
 
+### Building a mesh from atom positions
+
+`Surface.from_atoms_gaussian` builds a closed, watertight Gaussian
+molecular surface (TMSmesh-style: ρ(r) = Σᵢ exp(d·(1 − r²/Rᵢ²)) at
+isolevel 1, polygonised with marching cubes and lightly Taubin-smoothed)
+straight from atom positions and radii — no MSMS or NanoShaper required.
+
+```python
+import numpy as np
+import selfie as s
+
+positions, charges = s.read_pqr("protein.pqr")
+radii = np.full(len(positions), 1.5)  # or per-atom from a force-field table
+
+surface = s.Surface.from_atoms_gaussian(positions, radii, grid_spacing=0.5)
+side = surface.classify_charges(positions)
+
+media = s.Dielectric(eps_in=4.0, eps_out=80.0, kappa=0.125)  # physiological salt
+sol = s.BemSolution.solve(surface, media, side, positions, charges)
+```
+
+`grid_spacing` (Å) is the only resolution knob — smaller gives a finer
+mesh at quadratic memory cost. The mesher is on by default; disable it
+with `default-features = false` in Cargo if you want a leaner build.
+
+To inspect the mesh in PyMOL or VMD, write it to OBJ:
+
+```python
+surface.write_obj("protein.obj")
+# PyMOL:  cmd.load("protein.obj", "surf")
+# VMD:    mol new protein.obj
+```
+
 ### Solving on a pre-built mesh
 
 `Surface.from_msms` reads the standard MSMS `.vert` / `.face` pair;
@@ -133,8 +166,13 @@ Target meshes are SES-like triangulations of real biomolecules —
 lysozyme at 14 k faces solves in ≈ 1.6 s on a laptop, matching
 [pyGBe](https://github.com/pygbe/pygbe)'s reference E_solv to 0.1 %.
 
-selfie reads standard community mesh + charge formats: MSMS `.vert` /
-`.face` for geometry and PQR for charges.
+A pure-Rust **Gaussian molecular-surface mesher** is built in (Cargo
+feature `mesh`, on by default), so a closed triangulated surface can be
+generated directly from atom positions and radii without an external
+binary like MSMS or NanoShaper. Pre-meshed input is also supported —
+selfie reads standard community mesh + charge formats (MSMS `.vert` /
+`.face` for geometry, PQR for charges) and writes Wavefront OBJ for
+visualisation.
 
 ## Theory
 

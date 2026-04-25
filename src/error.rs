@@ -30,6 +30,12 @@ pub enum Error {
     #[error("charge arrays have mismatched lengths: {positions} positions vs {values} values")]
     ChargeLenMismatch { positions: usize, values: usize },
 
+    #[error("atom arrays have mismatched lengths: {positions} positions vs {radii} radii")]
+    AtomsLenMismatch { positions: usize, radii: usize },
+
+    #[error("atom {index} has non-positive or non-finite radius {radius:e}")]
+    NonPositiveRadius { index: usize, radius: f64 },
+
     #[error("charge index {index} is out of range (have {count} charges)")]
     ChargeIndexOutOfRange { index: usize, count: usize },
 
