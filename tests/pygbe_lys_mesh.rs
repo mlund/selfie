@@ -13,7 +13,7 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::io::{Charges, read_msms, read_pqr};
+use selfie::io::{Atoms, read_msms, read_pqr};
 use selfie::units::to_kJ_per_mol;
 use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
 use std::path::PathBuf;
@@ -25,18 +25,18 @@ fn charge_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/pygbe_lys/built_parse.pqr")
 }
 
-fn load_lysozyme_at(resolution: &str) -> (Surface, Charges) {
+fn load_lysozyme_at(resolution: &str) -> (Surface, Atoms) {
     let dir = common::pygbe_lysozyme_dir();
     let vert = dir.join(format!("Lys{resolution}.vert"));
     let face = dir.join(format!("Lys{resolution}.face"));
     let (vertices, faces) = read_msms(&vert, &face).expect("read_msms");
     let surface = Surface::from_mesh(&vertices, &faces)
         .expect("lysozyme mesh should be a closed orientable 2-manifold");
-    let charges = read_pqr(charge_fixture()).expect("read_pqr");
-    (surface, charges)
+    let atoms = read_pqr(charge_fixture()).expect("read_pqr");
+    (surface, atoms)
 }
 
-fn load_lysozyme() -> (Surface, Charges) {
+fn load_lysozyme() -> (Surface, Atoms) {
     load_lysozyme_at("1")
 }
 
@@ -46,27 +46,27 @@ fn load_lysozyme() -> (Surface, Charges) {
 #[test]
 #[ignore]
 fn lysozyme_single_surface_pipeline() {
-    let (surface, charges) = load_lysozyme();
+    let (surface, atoms) = load_lysozyme();
     // MSMS dedup: Lys1 ships shared-vertex (not triangle-soup), so the
     // raw counts already reflect the topological structure.
     assert_eq!(surface.num_faces(), 14_398);
     assert_eq!(surface.num_vertices(), 7_201);
-    assert_eq!(charges.values.len(), 1_323);
+    assert_eq!(atoms.charges.len(), 1_323);
 
     // All atoms are inside the SES, by construction.
     let side = surface
-        .classify_charges(&charges.positions)
+        .classify_charges(&atoms.positions)
         .expect("classify_charges must produce a single side");
     assert_eq!(side, ChargeSide::Interior);
 
     // Sanity on the total integer charge: protein at neutral pH should
     // be within a few units of zero.
-    let total: f64 = charges.values.iter().sum();
+    let total: f64 = atoms.charges.iter().sum();
     assert!(total.abs() < 20.0, "unreasonable total charge: {total}");
     eprintln!(
         "lys_single_1 fixture: {} faces, {} atoms, total charge {:+.3} e",
         surface.num_faces(),
-        charges.values.len(),
+        atoms.charges.len(),
         total
     );
 }
@@ -91,7 +91,7 @@ fn lysozyme_full_solve() {
     const PYGBE_ESOLV_SINGLE_LYS1_KJ: f64 = -2401.2;
     const REL_TOL: f64 = 0.05;
 
-    let (surface, charges) = load_lysozyme();
+    let (surface, atoms) = load_lysozyme();
     let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
 
     let t = std::time::Instant::now();
@@ -99,22 +99,22 @@ fn lysozyme_full_solve() {
         &surface,
         media,
         ChargeSide::Interior,
-        &charges.positions,
-        &charges.values,
+        &atoms.positions,
+        &atoms.charges,
     )
     .expect("GMRES should converge on a well-conditioned BIE");
     eprintln!(
         "lysozyme full solve: {} faces, {} atoms, elapsed {:.1}s",
         surface.num_faces(),
-        charges.values.len(),
+        atoms.charges.len(),
         t.elapsed().as_secs_f64()
     );
 
     // E_solv = ½ Σ qᵢ φ_rf(rᵢ), summed over all source charges.
-    let e_solv_reduced: f64 = (0..charges.values.len())
+    let e_solv_reduced: f64 = (0..atoms.charges.len())
         .map(|j| {
             solution
-                .interaction_energy(&charges.positions, &charges.values, j, j)
+                .interaction_energy(&atoms.positions, &atoms.charges, j, j)
                 .expect("interaction_energy")
         })
         .sum::<f64>()
@@ -136,21 +136,21 @@ fn lysozyme_full_solve() {
     );
 }
 
-fn solve_and_report(label: &str, surface: &Surface, charges: &Charges) -> f64 {
+fn solve_and_report(label: &str, surface: &Surface, atoms: &Atoms) -> f64 {
     let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
     let t = std::time::Instant::now();
     let sol = BemSolution::solve(
         surface,
         media,
         ChargeSide::Interior,
-        &charges.positions,
-        &charges.values,
+        &atoms.positions,
+        &atoms.charges,
     )
     .expect("GMRES should converge");
     let elapsed = t.elapsed().as_secs_f64();
-    let e_solv_reduced: f64 = (0..charges.values.len())
+    let e_solv_reduced: f64 = (0..atoms.charges.len())
         .map(|j| {
-            sol.interaction_energy(&charges.positions, &charges.values, j, j)
+            sol.interaction_energy(&atoms.positions, &atoms.charges, j, j)
                 .expect("interaction_energy")
         })
         .sum::<f64>()
@@ -194,8 +194,8 @@ fn lysozyme_mesh_refinement_matches_pygbe_series() {
     ];
     let mut ours = Vec::with_capacity(REFERENCES.len());
     for (label, ref_kj) in &REFERENCES {
-        let (surface, charges) = load_lysozyme_at(&label[3..]);
-        let e_kj = solve_and_report(label, &surface, &charges);
+        let (surface, atoms) = load_lysozyme_at(&label[3..]);
+        let e_kj = solve_and_report(label, &surface, &atoms);
         let rel = (e_kj - ref_kj).abs() / ref_kj.abs();
         eprintln!("  pygbe = {ref_kj:+.2} kJ/mol, rel = {:.2}%", rel * 100.0);
         assert!(

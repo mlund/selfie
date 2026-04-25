@@ -26,15 +26,15 @@ fn lysozyme_basis_matches_direct_solve() {
     let surface = Surface::from_mesh(&vertices, &faces).unwrap();
     let charge_pqr: PathBuf =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/pygbe_lys/built_parse.pqr");
-    let charges = read_pqr(&charge_pqr).unwrap();
+    let atoms = read_pqr(&charge_pqr).unwrap();
     let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
 
     // why: five atom positions spread across the lysozyme structure;
-    // any interior subset of `charges.positions` works, but sampling
+    // any interior subset of `atoms.positions` works, but sampling
     // by index spaces them out rather than clustering on one
     // residue.
-    let stride = charges.positions.len() / 5;
-    let sites: Vec<[f64; 3]> = (0..5).map(|k| charges.positions[k * stride]).collect();
+    let stride = atoms.positions.len() / 5;
+    let sites: Vec<[f64; 3]> = (0..5).map(|k| atoms.positions[k * stride]).collect();
     let q = [0.7_f64, -0.4, 0.5, -0.9, 0.3];
 
     let t = Instant::now();

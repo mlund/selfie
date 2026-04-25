@@ -8,35 +8,55 @@
 //!
 //! Skipped lines generate a `log::warn!` so they aren't invisible.
 
-use super::{Charges, io_err, open};
+use super::{Atoms, io_err, open};
 use crate::error::Result;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-/// Read charges from a whitespace columnar `.xyz` file.
+/// Read atom records from a whitespace columnar `.xyz` file.
 ///
 /// # Errors
 /// Returns [`Error::Io`] only if the file cannot be opened. Any other
 /// malformed content results in a skipped line with a warning; the
-/// caller should assert non-empty on the returned `Charges` if required.
-pub fn read_xyz(path: impl AsRef<Path>) -> Result<Charges> {
+/// caller should assert non-empty on the returned `Atoms` if required.
+pub fn read_xyz(path: impl AsRef<Path>) -> Result<Atoms> {
     let path = path.as_ref();
     let file = open(path)?;
 
     let mut positions = Vec::new();
-    let mut values = Vec::new();
+    let mut charges = Vec::new();
+    let mut radii = Vec::new();
+    let mut radii_present = 0_usize;
     let mut skipped = 0_usize;
 
     for (line_no, line) in BufReader::new(file).lines().enumerate() {
         let line = line.map_err(|e| io_err(path, line_no + 1, e.to_string()))?;
         match parse_atom_line(&line) {
-            Some((x, y, z, q)) => {
+            Some((x, y, z, q, r)) => {
                 positions.push([x, y, z]);
-                values.push(q);
+                charges.push(q);
+                if let Some(r) = r {
+                    radii.push(r);
+                    radii_present += 1;
+                }
             }
             None if !line.trim().is_empty() => skipped += 1,
             None => {}
         }
+    }
+
+    // why: an XYZ file is meant to be all-or-nothing on the radius column.
+    // Mixed presence would produce a `radii` Vec out of step with
+    // `positions`, silently breaking downstream meshers. Reject the
+    // mixed case rather than carrying a ragged `radii` along.
+    if radii_present != 0 && radii_present != charges.len() {
+        radii.clear();
+        log::warn!(
+            "XYZ {}: radius column inconsistent ({}/{} atoms had radii); discarding",
+            path.display(),
+            radii_present,
+            charges.len()
+        );
     }
 
     if skipped > 0 {
@@ -46,14 +66,18 @@ pub fn read_xyz(path: impl AsRef<Path>) -> Result<Charges> {
             skipped
         );
     }
-    log::info!("XYZ {}: {} charges loaded", path.display(), values.len());
-    Ok(Charges { positions, values })
+    log::info!("XYZ {}: {} atoms loaded", path.display(), charges.len());
+    Ok(Atoms {
+        positions,
+        charges,
+        radii,
+    })
 }
 
 /// Try to parse a single line as `element x y z charge [radius]`.
 /// Returns `None` for anything that doesn't match the pattern so the
 /// caller can transparently skip headers, comments, and extxyz metadata.
-fn parse_atom_line(line: &str) -> Option<(f64, f64, f64, f64)> {
+fn parse_atom_line(line: &str) -> Option<(f64, f64, f64, f64, Option<f64>)> {
     if line.trim_start().starts_with('#') {
         return None;
     }
@@ -71,13 +95,14 @@ fn parse_atom_line(line: &str) -> Option<(f64, f64, f64, f64)> {
     let y = tokens.next()?.parse::<f64>().ok()?;
     let z = tokens.next()?.parse::<f64>().ok()?;
     let q = tokens.next()?.parse::<f64>().ok()?;
-    if let Some(radius) = tokens.next() {
-        radius.parse::<f64>().ok()?;
-        if tokens.next().is_some() {
-            return None; // more than 6 tokens ⇒ reject
-        }
+    let radius = match tokens.next() {
+        Some(tok) => Some(tok.parse::<f64>().ok()?),
+        None => None,
+    };
+    if tokens.next().is_some() {
+        return None; // more than 6 tokens ⇒ reject
     }
-    Some((x, y, z, q))
+    Some((x, y, z, q, radius))
 }
 
 #[cfg(test)]
@@ -97,16 +122,18 @@ mod tests {
     #[test]
     fn parses_minimal_five_column() {
         let path = write_tmp("a.xyz", "C 0.0 0.0 0.0 -0.2\nH 1.0 0.0 0.0 +0.1\n");
-        let c = read_xyz(&path).unwrap();
-        assert_eq!(c.positions.len(), 2);
-        assert_eq!(c.values, vec![-0.2, 0.1]);
+        let a = read_xyz(&path).unwrap();
+        assert_eq!(a.positions.len(), 2);
+        assert_eq!(a.charges, vec![-0.2, 0.1]);
+        assert!(a.radii.is_empty());
     }
 
     #[test]
     fn accepts_optional_radius() {
         let path = write_tmp("b.xyz", "C 0.0 0.0 0.0 -0.2 1.7\n");
-        let c = read_xyz(&path).unwrap();
-        assert_eq!(c.values, vec![-0.2]);
+        let a = read_xyz(&path).unwrap();
+        assert_eq!(a.charges, vec![-0.2]);
+        assert_eq!(a.radii, vec![1.7]);
     }
 
     #[test]
@@ -118,8 +145,20 @@ mod tests {
              H 0.5 0.5 0.5 +0.1\n\
              O 1.0 0.0 0.0 -0.5 1.52\n",
         );
-        let c = read_xyz(&path).unwrap();
-        assert_eq!(c.values.len(), 3);
+        let a = read_xyz(&path).unwrap();
+        assert_eq!(a.charges.len(), 3);
+        // Mixed presence (one row missing radius) — drop radii entirely.
+        assert!(a.radii.is_empty());
+    }
+
+    #[test]
+    fn populates_radii_when_all_rows_have_them() {
+        let path = write_tmp(
+            "f.xyz",
+            "C 0.0 0.0 0.0 -0.2 1.7\nH 0.5 0.5 0.5 +0.1 1.2\n",
+        );
+        let a = read_xyz(&path).unwrap();
+        assert_eq!(a.radii, vec![1.7, 1.2]);
     }
 
     #[test]
@@ -132,14 +171,14 @@ mod tests {
              H 0.5 0.5 0.5 +0.1\n\
              O 1.0 0.0 0.0 -0.5\n",
         );
-        let c = read_xyz(&path).unwrap();
-        assert_eq!(c.values.len(), 3);
+        let a = read_xyz(&path).unwrap();
+        assert_eq!(a.charges.len(), 3);
     }
 
     #[test]
     fn returns_empty_when_no_atom_lines() {
         let path = write_tmp("e.xyz", "3\ncomment only, no data\n");
-        let c = read_xyz(&path).unwrap();
-        assert!(c.positions.is_empty());
+        let a = read_xyz(&path).unwrap();
+        assert!(a.positions.is_empty());
     }
 }

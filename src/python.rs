@@ -555,28 +555,38 @@ impl PyLinearResponse {
 // Free functions
 // =========================================================================
 
-/// Return type alias for the charge-file readers below.
-type ChargeArrays<'py> = (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>);
+/// Return type for the charge-file readers below: `(positions, charges,
+/// radii)`. `positions` is `(N, 3) float64`, `charges` is `(N,) float64`
+/// in elementary charges, `radii` is `(N,) float64` in Å — empty when
+/// the source format has no radius column (XYZ in 5-column form).
+type AtomArrays<'py> = (
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+);
 
-/// Load charges from a PQR file. Returns `(positions, values)` where
-/// `positions` is `(N, 3) float64` in Å and `values` is `(N,) float64`
-/// in elementary charges.
+/// Load atoms from a PQR file. Returns `(positions, charges, radii)`.
+/// PQR always carries radii.
 #[pyfunction]
-fn read_pqr<'py>(py: Python<'py>, path: &str) -> PyResult<ChargeArrays<'py>> {
-    let charges = crate::io::read_pqr(path)?;
+fn read_pqr<'py>(py: Python<'py>, path: &str) -> PyResult<AtomArrays<'py>> {
+    let atoms = crate::io::read_pqr(path)?;
     Ok((
-        positions_to_numpy(py, &charges.positions),
-        PyArray1::from_vec(py, charges.values),
+        positions_to_numpy(py, &atoms.positions),
+        PyArray1::from_vec(py, atoms.charges),
+        PyArray1::from_vec(py, atoms.radii),
     ))
 }
 
-/// Load charges from an XYZ-style file.
+/// Load atoms from an XYZ-style file. Returns `(positions, charges,
+/// radii)`. `radii` is empty (zero-length array) when the file uses the
+/// 5-column form without radii.
 #[pyfunction]
-fn read_xyz<'py>(py: Python<'py>, path: &str) -> PyResult<ChargeArrays<'py>> {
-    let charges = crate::io::read_xyz(path)?;
+fn read_xyz<'py>(py: Python<'py>, path: &str) -> PyResult<AtomArrays<'py>> {
+    let atoms = crate::io::read_xyz(path)?;
     Ok((
-        positions_to_numpy(py, &charges.positions),
-        PyArray1::from_vec(py, charges.values),
+        positions_to_numpy(py, &atoms.positions),
+        PyArray1::from_vec(py, atoms.charges),
+        PyArray1::from_vec(py, atoms.radii),
     ))
 }
 

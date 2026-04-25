@@ -1,10 +1,10 @@
-//! File readers for mesh and charge data.
+//! File readers for mesh and atom data.
 //!
 //! Exactly four public items: [`read_msms`] for MSMS-format meshes
 //! (`.vert` + `.face` pair — pygbe/NanoShaper convention), [`read_pqr`]
-//! for PQR-format charges, [`read_xyz`] for a permissive whitespace
-//! columnar format (`element x y z charge [radius]`), and [`Charges`]
-//! as the return type for the two charge readers.
+//! for PQR atom records, [`read_xyz`] for a permissive whitespace
+//! columnar format (`element x y z charge [radius]`), and [`Atoms`]
+//! as the return type for the two atom-record readers.
 //!
 //! All readers emit diagnostics via the `log` crate — `info!` for
 //! successful counts and `warn!` for tolerated oddities (lines that
@@ -53,13 +53,20 @@ pub(in crate::io) fn parse_f64(path: &Path, line: usize, token: &str) -> Result<
         .map_err(|e| io_err(path, line, format!("expected f64, got {token:?}: {e}")))
 }
 
-/// Point charges produced by [`read_pqr`] and [`read_xyz`].
+/// Atom records produced by [`read_pqr`] and [`read_xyz`].
 ///
 /// Layout is the same SoA `&[[f64; 3]]` / `&[f64]` shape used by
 /// [`crate::BemSolution::solve`], so the parsed data flows through
 /// without repacking.
+///
+/// `radii` is populated when the source format carries a radius column —
+/// always for PQR, optionally for XYZ. When the file has no radii the
+/// field is an empty `Vec` (callers that need radii should check
+/// `radii.len() == positions.len()` before using). The radii feed
+/// directly into [`crate::Surface::from_atoms_gaussian`].
 #[derive(Debug, Clone, Default)]
-pub struct Charges {
+pub struct Atoms {
     pub positions: Vec<[f64; 3]>,
-    pub values: Vec<f64>,
+    pub charges: Vec<f64>,
+    pub radii: Vec<f64>,
 }

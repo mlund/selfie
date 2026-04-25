@@ -31,25 +31,25 @@ fn bem_reproduces_pygbe_sphere_via_file_io() {
 
     let (vertices, faces) = read_msms(&vert, &face).expect("failed to read MSMS mesh");
     let surface = Surface::from_mesh(&vertices, &faces).expect("from_mesh rejected the mesh");
-    let charges = read_pqr(&pqr).expect("failed to read PQR");
+    let atoms = read_pqr(&pqr).expect("failed to read PQR");
 
     let side = surface
-        .classify_charges(&charges.positions)
+        .classify_charges(&atoms.positions)
         .expect("classify_charges could not determine a single side");
 
     // pygbe's sphere config: FIELD 2 (exterior) has D = 80, κ = 0.125.
     //                       FIELD 1 (interior) has D_i = 4, κ = 0.
     let media = Dielectric::continuum_with_salt(4.0, 80.0, 0.125);
-    let sol = BemSolution::solve(&surface, media, side, &charges.positions, &charges.values)
+    let sol = BemSolution::solve(&surface, media, side, &atoms.positions, &atoms.charges)
         .expect("BemSolution::solve failed");
 
     // Match pygbe's E_solv: (1/2) Σ q_i · φ_rf(r_i).
-    let mut phi = vec![0.0_f64; charges.positions.len()];
-    sol.reaction_field_at_many(&charges.positions, &mut phi)
+    let mut phi = vec![0.0_f64; atoms.positions.len()];
+    sol.reaction_field_at_many(&atoms.positions, &mut phi)
         .unwrap();
     let u: f64 = 0.5
-        * charges
-            .values
+        * atoms
+            .charges
             .iter()
             .zip(&phi)
             .map(|(&q, &p)| q * p)

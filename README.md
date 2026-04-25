@@ -47,11 +47,9 @@ isolevel 1, polygonised with marching cubes and lightly Taubin-smoothed)
 straight from atom positions and radii — no MSMS or NanoShaper required.
 
 ```python
-import numpy as np
 import selfie as s
 
-positions, charges = s.read_pqr("protein.pqr")
-radii = np.full(len(positions), 1.5)  # or per-atom from a force-field table
+positions, charges, radii = s.read_pqr("protein.pqr")
 
 surface = s.Surface.from_atoms_gaussian(positions, radii, grid_spacing=0.5)
 side = surface.classify_charges(positions)
@@ -83,7 +81,7 @@ hard-code it.
 import selfie as s
 
 surface = s.Surface.from_msms("Lys1.vert", "Lys1.face")
-positions, charges = s.read_pqr("built_parse.pqr")
+positions, charges, _radii = s.read_pqr("built_parse.pqr")
 side = surface.classify_charges(positions)
 
 media = s.Dielectric(eps_in=4.0, eps_out=80.0, kappa=0.125)  # physiological salt

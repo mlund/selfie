@@ -62,12 +62,15 @@ def test_linear_response_quadratic_scaling():
 def test_read_pqr_lysozyme_shapes():
     if not LYSOZYME_PQR.exists():
         pytest.skip("lysozyme fixture not present")
-    positions, charges = s.read_pqr(str(LYSOZYME_PQR))
+    positions, charges, radii = s.read_pqr(str(LYSOZYME_PQR))
     # built_parse.pqr ships with 1323 atoms.
     assert positions.shape == (1323, 3)
     assert charges.shape == (1323,)
+    assert radii.shape == (1323,)
     assert positions.dtype == np.float64
     assert charges.dtype == np.float64
+    assert radii.dtype == np.float64
+    assert (radii > 0.0).all()
 
 
 def test_charge_length_mismatch_raises_value_error():
