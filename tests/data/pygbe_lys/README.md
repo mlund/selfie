@@ -1,0 +1,63 @@
+# pyGBe lysozyme test fixtures
+
+These charge files (`built_parse.pqr`, `lys1_charges.pqr`) are
+derived from [pyGBe][pygbe]'s lysozyme regression-test data and
+bundled here so selfie's lysozyme integration tests can run without
+a network fetch for the charge inputs. (The MSMS mesh files
+`Lys1.{vert,face}` are downloaded on demand from Zenodo at test
+time — see `tests/common/mod.rs` — not bundled.)
+
+[pygbe]: https://github.com/pygbe/pygbe
+
+## Upstream license
+
+pyGBe is distributed under the BSD 3-Clause License. The license
+requires that the original copyright notice, the list of conditions,
+and the disclaimer be reproduced in any redistribution. Reproduced
+here to satisfy that requirement:
+
+> Copyright (c) 2013-2015 by Christopher Cooper, Lorena Barba
+> Copyright (c) 2016 by Christopher Cooper, Natalia Clementi,
+> Gilbert Forsyth, Lorena Barba
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions
+> are met:
+>
+> 1. Redistributions of source code must retain the above copyright
+>    notice, this list of conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above
+>    copyright notice, this list of conditions and the following
+>    disclaimer in the documentation and/or other materials provided
+>    with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its
+>    contributors may be used to endorse or promote products derived
+>    from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+> FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+> COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+> INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+> (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+> HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+> STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+> ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+> OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Files
+
+- `built_parse.pqr` — 1,323-atom charge set used by pyGBe's
+  single-surface convergence test `lys_single_1.config`. Source:
+  pyGBe's `tests/convergence_tests/input_files/`.
+- `lys1_charges.pqr` — ~1,100-atom charge set used by pyGBe's full
+  5-surface `lys` example. Source: pyGBe's `examples/lys/`.
+
+## Selfie's contribution
+
+Selfie does not modify these files; they are reproduced verbatim
+from upstream.

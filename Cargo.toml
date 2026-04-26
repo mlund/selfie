@@ -6,6 +6,8 @@ description = "Boundary-element solver for the linearised Poisson–Boltzmann eq
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mlund/selfie"
 readme = "README.md"
+keywords = ["bem", "poisson-boltzmann", "electrostatics", "biomolecule", "solvation"]
+categories = ["science"]
 
 [lib]
 # `rlib` for plain Rust consumers; `cdylib` so maturin can produce a
