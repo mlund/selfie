@@ -4,11 +4,11 @@
 //! in reduced units, kJ/mol, and kT, and compares against the classical
 //! Kirkwood 1934 interior-charge analytical reference.
 
-use selfie::units::{to_kJ_per_mol, to_kt};
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::units::{to_kJ_per_mol, to_kt};
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 #[cfg(feature = "validation")]
-use selfie::analytical::kirkwood_inside::pair_reaction_energy;
+use bemtzmann::analytical::kirkwood_inside::pair_reaction_energy;
 
 fn main() {
     let a = 10.0_f64;

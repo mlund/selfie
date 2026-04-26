@@ -1,11 +1,11 @@
-"""selfie — boundary-element solver for the linearised Poisson–Boltzmann equation.
+"""BEMtzmann — boundary-element solver for the linearised Poisson–Boltzmann equation.
 
-The entire public API is re-exported from the native ``_selfie`` extension
-module. See ``help(selfie.Surface)`` and friends for detailed signatures;
+The entire public API is re-exported from the native ``_bemtzmann`` extension
+module. See ``help(bemtzmann.Surface)`` and friends for detailed signatures;
 the project README shows end-to-end usage.
 """
 
-from ._selfie import (
+from ._bemtzmann import (
     BemSolution,
     ChargeSide,
     Dielectric,

@@ -45,7 +45,7 @@ struct GaussianMeshParams {
     /// Default 3: marching cubes on a perfectly axis-aligned grid produces
     /// triangles with high-symmetry coplanarity (many panel pairs share
     /// edges that pass through other panel centroids), which triggers a
-    /// log-divergence in selfie's WRG quadrature for the BEM matrix.
+    /// log-divergence in BEMtzmann's WRG quadrature for the BEM matrix.
     /// A few Taubin iterations move vertices off the lattice without
     /// changing topology, breaking those alignments.
     ///

@@ -2,7 +2,7 @@
 
 These charge files (`built_parse.pqr`, `lys1_charges.pqr`) are
 derived from [pyGBe][pygbe]'s lysozyme regression-test data and
-bundled here so selfie's lysozyme integration tests can run without
+bundled here so BEMtzmann's lysozyme integration tests can run without
 a network fetch for the charge inputs. (The MSMS mesh files
 `Lys1.{vert,face}` are downloaded on demand from Zenodo at test
 time — see `tests/common/mod.rs` — not bundled.)
@@ -60,7 +60,7 @@ here to satisfy that requirement:
 - `lys1_charges.pqr` — ~1,100-atom charge set used by pyGBe's full
   5-surface `lys` example. Source: pyGBe's `examples/lys/`.
 
-## Selfie's contribution
+## BEMtzmann's contribution
 
-Selfie does not modify these files; they are reproduced verbatim
+BEMtzmann does not modify these files; they are reproduced verbatim
 from upstream.

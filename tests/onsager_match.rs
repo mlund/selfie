@@ -3,7 +3,7 @@
 //! A point dipole at the centre of a dielectric sphere has a uniform
 //! interior reaction field and a solvation energy
 //!     U = −μ² · (ε_out − ε_in) / [ε_in · a³ · (2·ε_out + ε_in)]
-//! (See `selfie::analytical::onsager`.) We approximate the dipole with
+//! (See `bemtzmann::analytical::onsager`.) We approximate the dipole with
 //! two opposite charges at `(0, 0, ±d/2)` with `μ = q·d`, solve the BEM,
 //! and compare the resulting pair reaction-field energy against the
 //! closed form. The approximation error is dominated by the quadrupole
@@ -11,8 +11,8 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::analytical::onsager::dipole_solvation_energy;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::onsager::dipole_solvation_energy;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 const A: f64 = 10.0;
 const EPS_IN: f64 = 2.0;

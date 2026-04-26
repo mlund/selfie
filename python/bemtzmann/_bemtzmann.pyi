@@ -1,4 +1,4 @@
-"""Type stubs for the selfie native extension."""
+"""Type stubs for the BEMtzmann native extension."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-//! `selfie` command-line entry point.
+//! `bemtzmann` command-line entry point.
 //!
 //! Pipeline: read a structure file → build a Gaussian molecular surface →
 //! optionally write OBJ → optionally compute solvation free energy. The
@@ -10,13 +10,13 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 use log::LevelFilter;
-use selfie::io::{Atoms, read_pqr, read_xyz};
-use selfie::units::to_kJ_per_mol;
-use selfie::{BemSolution, ChargeSide, Dielectric, Error, Surface};
+use bemtzmann::io::{Atoms, read_pqr, read_xyz};
+use bemtzmann::units::to_kJ_per_mol;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Error, Surface};
 
 const KCAL_PER_KJ: f64 = 1.0 / 4.184;
 
-/// SelFie — boundary-element Poisson–Boltzmann CLI. Reads a structure
+/// BEMtzmann — boundary-element Poisson–Boltzmann CLI. Reads a structure
 /// file, builds a Gaussian molecular surface, optionally writes the
 /// mesh and/or computes the solvation free energy.
 #[derive(Parser, Debug)]

@@ -7,10 +7,10 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::analytical::born::born_self_energy;
-use selfie::analytical::kirkwood_inside::reaction_field_potential_unit_source as phi_rf_analytical;
-use selfie::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
-use selfie::{ChargeSide, Dielectric, LinearResponse, Surface};
+use bemtzmann::analytical::born::born_self_energy;
+use bemtzmann::analytical::kirkwood_inside::reaction_field_potential_unit_source as phi_rf_analytical;
+use bemtzmann::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
+use bemtzmann::{ChargeSide, Dielectric, LinearResponse, Surface};
 
 const A: f64 = 10.0;
 const EPS_IN: f64 = 2.0;

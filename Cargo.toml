@@ -1,5 +1,5 @@
 [package]
-name = "selfie"
+name = "bemtzmann"
 version = "0.1.0"
 edition = "2024"
 description = "Boundary-element solver for the linearised Poisson–Boltzmann equation."
@@ -20,7 +20,7 @@ default = ["mesh", "cli"]
 # turning a list of atom positions/radii into a closed triangulated surface.
 # On by default; disable with `default-features = false` for a leaner build.
 mesh = []
-# Command-line binary `selfie` — pipeline shell over the library.
+# Command-line binary `bemtzmann` — pipeline shell over the library.
 cli = ["dep:clap", "dep:env_logger", "mesh"]
 # Compile the Kirkwood analytical reference (otherwise gated to #[cfg(test)]).
 # Intended for benchmarks/examples that need the reference at runtime.
@@ -43,6 +43,6 @@ pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"], optiona
 numpy = { version = "0.28", optional = true }
 
 [[bin]]
-name = "selfie"
+name = "bemtzmann"
 path = "src/main.rs"
 required-features = ["cli"]

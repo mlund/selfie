@@ -10,9 +10,9 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::io::{read_msms, read_pqr};
-use selfie::units::to_kJ_per_mol;
-use selfie::{BemSolution, Dielectric, Surface};
+use bemtzmann::io::{read_msms, read_pqr};
+use bemtzmann::units::to_kJ_per_mol;
+use bemtzmann::{BemSolution, Dielectric, Surface};
 use std::path::PathBuf;
 
 const PYGBE_E_SOLV_KJ: f64 = -56.294777697138567;
@@ -61,7 +61,7 @@ fn bem_reproduces_pygbe_sphere_via_file_io() {
         "file I/O + BEM: U_solv = {u_kj:+.4} kJ/mol  \
          (pygbe: {PYGBE_E_SOLV_KJ:+.4}, rel = {rel:.3e})"
     );
-    assert!(rel < 5e-3, "selfie vs pygbe: rel.err = {rel:.3e}");
+    assert!(rel < 5e-3, "BEMtzmann vs pygbe: rel.err = {rel:.3e}");
 }
 
 /// Exterior-charge coverage on the pygbe sphere mesh. Closes the
@@ -78,8 +78,8 @@ fn bem_reproduces_pygbe_sphere_via_file_io() {
 /// `tests/kirkwood_match.rs`, now exercised on a real MSMS mesh.
 #[test]
 fn exterior_charge_on_pygbe_sphere_matches_kirkwood() {
-    use selfie::ChargeSide;
-    use selfie::analytical::kirkwood::reaction_field_potential_unit_source as phi_rf_analytical;
+    use bemtzmann::ChargeSide;
+    use bemtzmann::analytical::kirkwood::reaction_field_potential_unit_source as phi_rf_analytical;
 
     let vert = test_data("sphere500_R4.vert");
     let face = test_data("sphere500_R4.face");

@@ -12,8 +12,8 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::analytical::kirkwood_inside::reaction_field_potential_unit_source as phi_rf_analytical;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::kirkwood_inside::reaction_field_potential_unit_source as phi_rf_analytical;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 const A: f64 = 10.0;
 const R: f64 = 7.0; // 3 Å beneath the surface

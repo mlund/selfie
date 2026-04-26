@@ -3,7 +3,7 @@
 //! Place a unit charge at the centre of a dielectric sphere and ask the
 //! BEM for the reaction-field potential at the origin. By spherical
 //! symmetry the analytical answer collapses to a single-line formula (see
-//! `selfie::analytical::born`) with no Bessel or Legendre machinery —
+//! `bemtzmann::analytical::born`) with no Bessel or Legendre machinery —
 //! this is the tightest possible sanity check on the whole interior-
 //! charge pipeline (assembly RHS, Juffer block, interior evaluator).
 //!
@@ -11,8 +11,8 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::analytical::born::reaction_field_at_center;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::born::reaction_field_at_center;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 const A: f64 = 10.0;
 const EPS_IN: f64 = 2.0;

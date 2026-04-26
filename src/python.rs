@@ -1,4 +1,4 @@
-//! pyo3 bindings for the selfie BEM solver.
+//! pyo3 bindings for the BEMtzmann BEM solver.
 //!
 //! Exposes a deliberately minimal Python surface: four classes
 //! (`Surface`, `Dielectric`, `BemSolution`, `LinearResponse`), one
@@ -27,7 +27,7 @@ use pyo3::exceptions::{PyIndexError, PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::sync::Arc;
 
-/// Map `selfie::Error` to the Python exception that best fits each
+/// Map `bemtzmann::Error` to the Python exception that best fits each
 /// caller-visible misuse.
 impl From<Error> for PyErr {
     fn from(err: Error) -> PyErr {
@@ -83,7 +83,7 @@ fn positions_to_numpy<'py>(py: Python<'py>, positions: &[[f64; 3]]) -> Bound<'py
 // ChargeSide
 // =========================================================================
 
-#[pyclass(name = "ChargeSide", module = "selfie", eq, eq_int, from_py_object)]
+#[pyclass(name = "ChargeSide", module = "bemtzmann", eq, eq_int, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PyChargeSide {
     Interior,
@@ -112,7 +112,7 @@ impl From<ChargeSide> for PyChargeSide {
 // Dielectric
 // =========================================================================
 
-#[pyclass(name = "Dielectric", module = "selfie", frozen, from_py_object)]
+#[pyclass(name = "Dielectric", module = "bemtzmann", frozen, from_py_object)]
 #[derive(Clone, Copy)]
 pub struct PyDielectric {
     inner: Dielectric,
@@ -155,7 +155,7 @@ impl PyDielectric {
 // Surface
 // =========================================================================
 
-#[pyclass(name = "Surface", module = "selfie", frozen)]
+#[pyclass(name = "Surface", module = "bemtzmann", frozen)]
 pub struct PySurface {
     inner: Arc<Surface>,
 }
@@ -258,7 +258,7 @@ impl PySurface {
 // BemSolution
 // =========================================================================
 
-#[pyclass(name = "BemSolution", module = "selfie")]
+#[pyclass(name = "BemSolution", module = "bemtzmann")]
 pub struct PyBemSolution {
     // why: holding an Arc lets the surface outlive the Python Surface
     // object in case the user drops it — avoids dangling references.
@@ -370,7 +370,7 @@ impl PyBemSolution {
 // LinearResponse
 // =========================================================================
 
-#[pyclass(name = "LinearResponse", module = "selfie")]
+#[pyclass(name = "LinearResponse", module = "bemtzmann")]
 pub struct PyLinearResponse {
     surface: Arc<Surface>,
     media: Dielectric,
@@ -633,8 +633,8 @@ fn to_kt(energy: f64, temperature_k: f64) -> f64 {
 // =========================================================================
 
 #[pymodule]
-#[pyo3(name = "_selfie")]
-fn selfie(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pyo3(name = "_bemtzmann")]
+fn bemtzmann(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChargeSide>()?;
     m.add_class::<PyDielectric>()?;
     m.add_class::<PySurface>()?;

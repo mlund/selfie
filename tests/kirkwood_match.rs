@@ -9,8 +9,8 @@
 mod common;
 
 use common::{A, EPS_IN, EPS_OUT, eval_point, source};
-use selfie::analytical::kirkwood::reaction_field_potential_unit_source;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::kirkwood::reaction_field_potential_unit_source;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 fn bem_phi_rf(subdivisions: usize) -> f64 {
     let surface = Surface::icosphere(A, subdivisions);

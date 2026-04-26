@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn parses_minimal_tetrahedron() {
-        let dir = std::env::temp_dir().join("selfie_msms_test_a");
+        let dir = std::env::temp_dir().join("bemtzmann_msms_test_a");
         std::fs::create_dir_all(&dir).unwrap();
         let vert = write_tmp(
             &dir,
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn ignores_trailing_columns() {
-        let dir = std::env::temp_dir().join("selfie_msms_test_b");
+        let dir = std::env::temp_dir().join("bemtzmann_msms_test_b");
         std::fs::create_dir_all(&dir).unwrap();
         let vert = write_tmp(
             &dir,
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn rejects_face_index_out_of_range() {
-        let dir = std::env::temp_dir().join("selfie_msms_test_c");
+        let dir = std::env::temp_dir().join("bemtzmann_msms_test_c");
         std::fs::create_dir_all(&dir).unwrap();
         let vert = write_tmp(&dir, "t.vert", "0 0 0\n1 0 0\n0 1 0\n");
         let face = write_tmp(&dir, "t.face", "1 2 9\n");

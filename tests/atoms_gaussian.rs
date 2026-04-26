@@ -10,8 +10,8 @@
 
 #![cfg(all(feature = "mesh", feature = "validation"))]
 
-use selfie::analytical::born::reaction_field_at_center;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::born::reaction_field_at_center;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 const A: f64 = 10.0;
 const EPS_IN: f64 = 2.0;

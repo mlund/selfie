@@ -36,7 +36,7 @@ const PYGBE_MESH_ARCHIVE_URL: &str =
 /// The archive (`~9 MB`, zenodo.org) expands to `regresion_tests_meshes/Lysozyme/`
 /// containing `Lys{1,2,4,8}.{vert,face}` plus stern/cavity variants we
 /// don't use. We cache the extracted directory under
-/// `$SELFIE_PYGBE_MESH_DIR` if set, else `$HOME/.cache/selfie/pygbe_meshes/`,
+/// `` if set, else `$HOME/.cache/bemtzmann/pygbe_meshes/`,
 /// else a `target/` subdirectory. Subsequent test runs reuse the cache.
 ///
 /// # Panics
@@ -62,7 +62,7 @@ fn cache_root() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
         return PathBuf::from(home)
             .join(".cache")
-            .join("selfie")
+            .join("bemtzmann")
             .join("pygbe_meshes");
     }
     // Last-resort fallback: inside the Cargo target dir. Survives cargo

@@ -13,8 +13,8 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 const A: f64 = 10.0;
 const EPS_IN: f64 = 2.0;
@@ -106,7 +106,7 @@ fn reproduces_pygbe_sphere_example_geometry() {
     eprintln!(
         "pygbe sphere geometry: U_self = {reference:.6e} e²/Å \
          = {:.3} kJ/mol",
-        selfie::units::to_kJ_per_mol(reference)
+        bemtzmann::units::to_kJ_per_mol(reference)
     );
 
     let bem = bem_solvation_with(&p, 7, &charges);

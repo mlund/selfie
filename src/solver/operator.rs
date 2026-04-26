@@ -11,7 +11,7 @@
 //!
 //! Per-iteration wall-clock spacing is emitted at `log::debug!`.
 //! Install an `env_logger` (or similar) and set
-//! `RUST_LOG=selfie=debug` to see it.
+//! `RUST_LOG=bemtzmann=debug` to see it.
 
 use crate::geometry::panel::FaceGeoms;
 use crate::solver::treecode::PointTreecode;

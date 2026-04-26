@@ -2,7 +2,7 @@
 
 These mesh and charge files (`sphere500_R4.{vert,face}`,
 `offcenter_R2.pqr`) are derived from [pyGBe][pygbe]'s sphere
-regression-test data and bundled here so selfie's
+regression-test data and bundled here so BEMtzmann's
 `pygbe_sphere_mesh` integration test can run without a network
 fetch.
 
@@ -60,7 +60,7 @@ here to satisfy that requirement:
   inside the sphere; matches pyGBe's exterior-charge convergence
   test setup.
 
-## Selfie's contribution
+## BEMtzmann's contribution
 
-Selfie does not modify these files; they are reproduced verbatim
+BEMtzmann does not modify these files; they are reproduced verbatim
 from upstream.

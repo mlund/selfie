@@ -1,4 +1,4 @@
-# SelFie
+# BEMtzmann
 
 A boundary-element solver for the linearized Poisson–Boltzmann equation,
 written in Rust. Computes the electrostatic response of a protein (or any
@@ -15,7 +15,7 @@ Given:
 - a set of point charges living on one side of the surface (typically
   inside the protein),
 
-selfie returns:
+BEMtzmann returns:
 - the surface potential and its normal derivative at each triangle's
   centroid,
 - the **reaction-field potential** `φ_rf(r)` at any probe point — the
@@ -38,7 +38,7 @@ A pure-Rust **Gaussian molecular-surface mesher** is built in (Cargo
 feature `mesh`, on by default), so a closed triangulated surface can be
 generated directly from atom positions and radii without an external
 binary like MSMS or NanoShaper. Pre-meshed input is also supported —
-selfie reads standard community mesh + charge formats (MSMS `.vert` /
+BEMtzmann reads standard community mesh + charge formats (MSMS `.vert` /
 `.face` for geometry, PQR for charges) and writes Wavefront OBJ for
 visualisation.
 
@@ -61,15 +61,15 @@ dielectric sphere, compared against the Born closed form:
 
 ```python
 import numpy as np
-import selfie as s
+import bemtzmann as bm
 
-surface = s.Surface.icosphere(radius=10.0, subdivisions=5)
+surface = bm.Surface.icosphere(radius=10.0, subdivisions=5)
 positions = np.array([[0.0, 0.0, 0.0]])
 charges = np.array([1.0])
-sol = s.BemSolution.solve(surface, positions, charges, eps_in=2.0, eps_out=80.0)
+sol = bm.BemSolution.solve(surface, positions, charges, eps_in=2.0, eps_out=80.0)
 
 u_born = 0.5 * charges[0] * sol.reaction_field_at((0.0, 0.0, 0.0))
-print(f"Born solvation energy: {s.to_kJ_per_mol(u_born):.2f} kJ/mol")
+print(f"Born solvation energy: {bm.to_kJ_per_mol(u_born):.2f} kJ/mol")
 ```
 
 `eps_in`, `eps_out`, `kappa`, and `side` are keyword-only. Defaults
@@ -89,11 +89,11 @@ molecular surface ([TMSmesh-style](https://doi.org/10.1021/ct100376g):
 from atom positions and radii — no MSMS or NanoShaper required.
 
 ```python
-import selfie as s
+import bemtzmann as bm
 
-positions, charges, radii = s.read_pqr("protein.pqr")
-surface = s.Surface.from_atoms_gaussian(positions, radii, grid_spacing=1.5)
-sol = s.BemSolution.solve(surface, positions, charges,
+positions, charges, radii = bm.read_pqr("protein.pqr")
+surface = bm.Surface.from_atoms_gaussian(positions, radii, grid_spacing=1.5)
+sol = bm.BemSolution.solve(surface, positions, charges,
                           eps_in=4.0, eps_out=80.0, kappa=0.125)
 ```
 
@@ -114,15 +114,15 @@ surface.write_obj("protein.obj")
 `Surface.from_msms` reads the standard MSMS `.vert` / `.face` pair;
 `read_pqr` loads atom charges and radii. `BemSolution.solve`
 auto-classifies which side of the dielectric boundary the charges
-live on by default — pass `side=s.ChargeSide.Interior` (or
+live on by default — pass `side=bm.ChargeSide.Interior` (or
 `Exterior`) to override.
 
 ```python
-import selfie as s
+import bemtzmann as bm
 
-surface = s.Surface.from_msms("Lys1.vert", "Lys1.face")
-positions, charges, _radii = s.read_pqr("built_parse.pqr")
-sol = s.BemSolution.solve(surface, positions, charges,
+surface = bm.Surface.from_msms("Lys1.vert", "Lys1.face")
+positions, charges, _radii = bm.read_pqr("built_parse.pqr")
+sol = bm.BemSolution.solve(surface, positions, charges,
                           eps_in=4.0, eps_out=80.0, kappa=0.125)
 ```
 
@@ -130,12 +130,12 @@ sol = s.BemSolution.solve(surface, positions, charges,
 
 ```python
 import numpy as np
-import selfie as s
+import bemtzmann as bm
 
 # E_solv = ½ Σ_j q_j · φ_rf(r_j), summed over all source charges.
 phi = sol.reaction_field_at_many(positions)
 e_solv_reduced = 0.5 * np.dot(charges, phi)
-print(f"E_solv = {s.to_kJ_per_mol(e_solv_reduced):.2f} kJ/mol")
+print(f"E_solv = {bm.to_kJ_per_mol(e_solv_reduced):.2f} kJ/mol")
 ```
 
 ### Many charge configurations over the same mesh
@@ -146,7 +146,7 @@ studies), precompute the linear-response basis once and turn every
 downstream query into dense linear algebra:
 
 ```python
-basis = s.LinearResponse.precompute(surface, positions,
+basis = bm.LinearResponse.precompute(surface, positions,
                                     eps_in=4.0, eps_out=80.0, kappa=0.125)
 
 q1 = charges
@@ -155,7 +155,7 @@ q2[0] += 1.0   # flip one site's protonation
 
 e1 = basis.solvation_energy(q1)
 e2 = basis.solvation_energy(q2)
-print(f"ΔE_solv = {s.to_kJ_per_mol(e2 - e1):.2f} kJ/mol")
+print(f"ΔE_solv = {bm.to_kJ_per_mol(e2 - e1):.2f} kJ/mol")
 ```
 
 The precompute cost is `N_sites` full BEM solves; every later
@@ -238,7 +238,7 @@ matched to the expansion orders. A neighbour-block (restricted-additive-
 Schwarz) preconditioner brings GMRES to a relative residual of `1e-5`
 in roughly 8–15 iterations on biomolecular meshes.
 
-| Stage | Naïve dense BEM | Selfie |
+| Stage | Naïve dense BEM | BEMtzmann |
 |---|---|---|
 | Per matvec | `O(N²)` | `O(N log N)` |
 | Memory | `O(N²)` | `O(N)` |
@@ -265,7 +265,7 @@ A helper is provided to convert energies to kJ/mol.
 
 ## Validation
 
-selfie is validated against closed-form analytical solutions on a
+BEMtzmann is validated against closed-form analytical solutions on a
 dielectric sphere and against an independent reference implementation on
 a real protein mesh.
 
@@ -287,7 +287,7 @@ coverage grid.
 ### Cross-validation against pyGBe
 
 On the **lysozyme** SES mesh (`Lys1`, 14 398 faces, 1 323 atoms, ε_in = 4,
-ε_out = 80, κ = 0.125 Å⁻¹) selfie matches pyGBe's reference
+ε_out = 80, κ = 0.125 Å⁻¹) BEMtzmann matches pyGBe's reference
 `E_solv = −573.90 kcal/mol` to **0.10 %**.
 
 Sphere-mesh runs against the pyGBe validation fixture

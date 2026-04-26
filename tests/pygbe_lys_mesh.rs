@@ -13,9 +13,9 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::io::{Atoms, read_msms, read_pqr};
-use selfie::units::to_kJ_per_mol;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::io::{Atoms, read_msms, read_pqr};
+use bemtzmann::units::to_kJ_per_mol;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 use std::path::PathBuf;
 
 mod common;

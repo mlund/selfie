@@ -11,7 +11,7 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 const A: f64 = 10.0;
 const EPS_IN: f64 = 2.0;

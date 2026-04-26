@@ -111,7 +111,7 @@ mod tests {
     use std::io::Write;
 
     fn write_tmp(name: &str, content: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join("selfie_xyz_test");
+        let dir = std::env::temp_dir().join("bemtzmann_xyz_test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(name);
         let mut f = std::fs::File::create(&path).unwrap();

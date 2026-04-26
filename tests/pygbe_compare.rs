@@ -17,9 +17,9 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
-use selfie::units::to_kJ_per_mol;
-use selfie::{BemSolution, ChargeSide, Dielectric, Surface};
+use bemtzmann::analytical::kirkwood_inside_salt::solvation_energy_z_axis;
+use bemtzmann::units::to_kJ_per_mol;
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
 
 // pygbe's reference solvation energy for this geometry, in kJ/mol
 // (originally -13.458119761457832 kcal/mol, scaled by 4.184 J/cal).
@@ -51,7 +51,7 @@ fn bem_matches_pygbe_sphere_result_at_equivalent_mesh() {
     eprintln!(
         "Analytical:   {:+.4} kJ/mol\n\
          pygbe (512):  {:+.4} kJ/mol\n\
-         selfie (500): {:+.4} kJ/mol  \
+         BEMtzmann (500): {:+.4} kJ/mol  \
          (vs pygbe: {:.2e}, vs analytical: {:.2e})",
         to_kJ_per_mol(analytical),
         PYGBE_E_SOLV_KJ,
@@ -66,6 +66,6 @@ fn bem_matches_pygbe_sphere_result_at_equivalent_mesh() {
     // than this at the same mesh resolution, the physics is diverging.
     assert!(
         rel_vs_pygbe < 5e-3,
-        "selfie vs pygbe: rel.err = {rel_vs_pygbe:.3e}"
+        "BEMtzmann vs pygbe: rel.err = {rel_vs_pygbe:.3e}"
     );
 }

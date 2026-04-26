@@ -11,8 +11,8 @@
 
 #![cfg(feature = "validation")]
 
-use selfie::io::{read_msms, read_pqr};
-use selfie::{BemSolution, ChargeSide, Dielectric, LinearResponse, Surface};
+use bemtzmann::io::{read_msms, read_pqr};
+use bemtzmann::{BemSolution, ChargeSide, Dielectric, LinearResponse, Surface};
 use std::path::PathBuf;
 use std::time::Instant;
 

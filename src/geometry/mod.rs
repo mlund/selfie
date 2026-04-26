@@ -542,7 +542,7 @@ mod tests {
     fn write_obj_round_trips_vertex_and_face_counts() {
         let s = Surface::icosphere(2.0, 1);
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("selfie_obj_test_{}.obj", std::process::id()));
+        let path = dir.join(format!("bemtzmann_obj_test_{}.obj", std::process::id()));
         s.write_obj(&path).expect("write_obj");
         let content = std::fs::read_to_string(&path).expect("read back");
         let n_v = content.lines().filter(|l| l.starts_with("v ")).count();

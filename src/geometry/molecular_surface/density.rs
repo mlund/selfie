@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 #[cfg(test)]
 use glam::DVec3;
 
-/// Map a kd-tree failure into a structured selfie error. The kd-tree only
+/// Map a kd-tree failure into a structured bemtzmann error. The kd-tree only
 /// fails on `WrongDimension` (statically impossible — we always use 3D) or
 /// `NonFiniteCoordinate` (caller-side bug — `validate_inputs` should have
 /// caught this). Either way, surface as `NonManifoldMesh` rather than
