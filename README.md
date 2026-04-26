@@ -174,6 +174,23 @@ probe = np.array([[0.0, 0.0, z] for z in np.linspace(-10, 10, 21)])
 phi_rf = sol.reaction_field_at_many(probe)
 ```
 
+For interactive isosurface viewing in PyMOL or VMD, write the
+reaction field on a regular 3D grid as OpenDX (the format
+[APBS](https://www.poissonboltzmann.org/) uses):
+
+```python
+sol.write_potential_dx("phi.dx")                     # auto: 1 Å, 5 Å pad
+sol.write_potential_dx("phi.dx", spacing=0.5)        # finer grid
+sol.write_potential_dx("phi.dx",
+                       origin=(-20.0, -20.0, -20.0),
+                       dims=(80, 80, 80))            # explicit grid
+# PyMOL:  cmd.load("phi.dx"); cmd.isosurface("iso", "phi.dx", level=0.05)
+# VMD:    mol new phi.dx type dx
+```
+
+The same `.dx` output is available from the CLI as `--potential-dx <PATH>`,
+with `--potential-spacing` and `--potential-padding` for grid control.
+
 ## Theory
 
 ### Continuum-electrostatics model

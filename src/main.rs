@@ -57,6 +57,19 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = SideArg::Auto)]
     side: SideArg,
 
+    /// Sample the reaction-field potential on a 3D grid and write OpenDX
+    /// (`.dx`) for visualisation in PyMOL or VMD. Implies `--solve`.
+    #[arg(long, value_name = "PATH")]
+    potential_dx: Option<PathBuf>,
+
+    /// Grid spacing for `--potential-dx` in Å.
+    #[arg(long, default_value_t = 1.0)]
+    potential_spacing: f64,
+
+    /// Padding around the atom bounding box for `--potential-dx`, in Å.
+    #[arg(long, default_value_t = 5.0)]
+    potential_padding: f64,
+
     /// Increase log verbosity (-v = info, -vv = debug). Default: warnings only.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -124,15 +137,40 @@ fn run(cli: &Cli) -> Result<(), Error> {
         println!("Wrote {}", obj_path.display());
     }
 
-    if cli.solve {
+    // why: `--potential-dx` needs a solved BemSolution too, so it
+    // implicitly turns the solver on regardless of `--solve`.
+    let needs_solve = cli.solve || cli.potential_dx.is_some();
+    if needs_solve {
         let side = resolve_side(&surface, &atoms.positions, cli.side)?;
         let media = Dielectric::continuum_with_salt(cli.eps_in, cli.eps_out, cli.kappa);
-        let e_reduced = compute_solvation_energy(&surface, media, side, &atoms)?;
-        let e_kj = to_kJ_per_mol(e_reduced);
-        let e_kcal = e_kj * KCAL_PER_KJ;
-        println!(
-            "E_solv = {e_kj:+.2} kJ/mol  ({e_kcal:+.2} kcal/mol)  [{e_reduced:+.4} e²/Å]"
-        );
+        let solution =
+            BemSolution::solve(&surface, media, side, &atoms.positions, &atoms.charges)?;
+
+        if cli.solve {
+            let e_reduced = solvation_energy_from(&solution, &atoms)?;
+            let e_kj = to_kJ_per_mol(e_reduced);
+            let e_kcal = e_kj * KCAL_PER_KJ;
+            println!(
+                "E_solv = {e_kj:+.2} kJ/mol  ({e_kcal:+.2} kcal/mol)  [{e_reduced:+.4} e²/Å]"
+            );
+        }
+
+        if let Some(dx_path) = &cli.potential_dx {
+            let (origin, spacing, dims) = derive_potential_grid(
+                &atoms.positions,
+                cli.potential_spacing,
+                cli.potential_padding,
+            );
+            solution.write_potential_dx(dx_path, origin, spacing, dims)?;
+            println!(
+                "Wrote {} (potential grid {}×{}×{}, spacing {:.2} Å)",
+                dx_path.display(),
+                dims[0],
+                dims[1],
+                dims[2],
+                cli.potential_spacing
+            );
+        }
     }
 
     Ok(())
@@ -181,19 +219,40 @@ const fn side_label(side: ChargeSide) -> &'static str {
     }
 }
 
-/// Total solvation energy E_solv = ½ Σ qⱼ φ_rf(rⱼ). Uses the batched
-/// `reaction_field_at_many` so the per-atom field evaluations share rayon
-/// parallelism — O(N_panels) total instead of O(N_atoms × N_panels) from
-/// looping `interaction_energy`.
-fn compute_solvation_energy(
-    surface: &Surface,
-    media: Dielectric,
-    side: ChargeSide,
-    atoms: &Atoms,
-) -> Result<f64, Error> {
-    let solution = BemSolution::solve(surface, media, side, &atoms.positions, &atoms.charges)?;
+/// Total solvation energy E_solv = ½ Σ qⱼ φ_rf(rⱼ) from an already-built
+/// solution. Uses the batched `reaction_field_at_many` so the per-atom
+/// field evaluations share rayon parallelism — O(N_panels) total instead
+/// of O(N_atoms × N_panels) from looping `interaction_energy`.
+fn solvation_energy_from(solution: &BemSolution<'_>, atoms: &Atoms) -> Result<f64, Error> {
     let mut phi_rf = vec![0.0_f64; atoms.charges.len()];
     solution.reaction_field_at_many(&atoms.positions, &mut phi_rf)?;
     let dot: f64 = atoms.charges.iter().zip(&phi_rf).map(|(&q, &p)| q * p).sum();
     Ok(0.5 * dot)
+}
+
+/// Build a regular cubic grid spanning the atom bounding box plus
+/// `padding` on every side, with isotropic `spacing` Å steps. Returns
+/// `(origin, [spacing; 3], dims)` ready to feed into
+/// `BemSolution::write_potential_dx`.
+fn derive_potential_grid(
+    positions: &[[f64; 3]],
+    spacing: f64,
+    padding: f64,
+) -> ([f64; 3], [f64; 3], [usize; 3]) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in positions {
+        for ((l, h), &c) in lo.iter_mut().zip(hi.iter_mut()).zip(p) {
+            *l = l.min(c);
+            *h = h.max(c);
+        }
+    }
+    let mut origin = [0.0_f64; 3];
+    let mut dims = [0_usize; 3];
+    for axis in 0..3 {
+        origin[axis] = lo[axis] - padding;
+        let upper = hi[axis] + padding;
+        dims[axis] = ((upper - origin[axis]) / spacing).ceil() as usize + 1;
+    }
+    (origin, [spacing; 3], dims)
 }

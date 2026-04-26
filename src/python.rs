@@ -71,6 +71,18 @@ fn faces_from_numpy(arr: &PyReadonlyArray2<'_, u32>) -> PyResult<Vec<[u32; 3]>> 
         .collect())
 }
 
+fn surface_bbox(verts: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for v in verts {
+        for ((l, h), &c) in lo.iter_mut().zip(hi.iter_mut()).zip(v) {
+            *l = l.min(c);
+            *h = h.max(c);
+        }
+    }
+    (lo, hi)
+}
+
 fn positions_to_numpy<'py>(py: Python<'py>, positions: &[[f64; 3]]) -> Bound<'py, PyArray2<f64>> {
     let n = positions.len();
     let flat: Vec<f64> = positions.iter().flat_map(|p| p.iter().copied()).collect();
@@ -348,6 +360,50 @@ impl PyBemSolution {
         let mut out = vec![0.0_f64; pts.len()];
         self.as_solution().reaction_field_at_many(&pts, &mut out)?;
         Ok(PyArray1::from_vec(py, out))
+    }
+
+    /// Sample `φ_rf` on a regular 3D grid and write it as OpenDX
+    /// (`.dx`) for visualisation in PyMOL or VMD.
+    ///
+    /// All keyword args have defaults — the simplest invocation is
+    /// `sol.write_potential_dx("phi.dx")`, which fits an isotropic
+    /// 1 Å grid around the surface bounding box plus 5 Å padding.
+    /// Override `spacing` (Å) for a finer/coarser grid, or pass
+    /// explicit `origin` and `dims` for full control (both required
+    /// together when overriding).
+    ///
+    /// Output values are in reduced units (`e/Å`).
+    #[pyo3(signature = (path, *, spacing = 1.0, padding = 5.0, origin = None, dims = None))]
+    fn write_potential_dx(
+        &self,
+        path: &str,
+        spacing: f64,
+        padding: f64,
+        origin: Option<[f64; 3]>,
+        dims: Option<[usize; 3]>,
+    ) -> PyResult<()> {
+        let (origin, dims) = match (origin, dims) {
+            (Some(o), Some(d)) => (o, d),
+            (None, None) => {
+                let (lo, hi) = surface_bbox(self.surface.vertices());
+                let mut o = [0.0_f64; 3];
+                let mut d = [0_usize; 3];
+                for axis in 0..3 {
+                    o[axis] = lo[axis] - padding;
+                    let upper = hi[axis] + padding;
+                    d[axis] = ((upper - o[axis]) / spacing).ceil() as usize + 1;
+                }
+                (o, d)
+            }
+            _ => {
+                return Err(PyValueError::new_err(
+                    "origin and dims must be provided together when overriding the auto-derived grid",
+                ));
+            }
+        };
+        self.as_solution()
+            .write_potential_dx(path, origin, [spacing; 3], dims)?;
+        Ok(())
     }
 
     /// Pairwise reaction-field interaction energy `q_j · φ_rf(r_j)`

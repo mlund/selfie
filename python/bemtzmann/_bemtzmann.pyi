@@ -41,13 +41,25 @@ class BemSolution:
     @staticmethod
     def solve(
         surface: Surface,
-        media: Dielectric,
-        side: ChargeSide,
         positions: _F64Array2,
         charges: _F64Array1,
+        *,
+        eps_in: float = 4.0,
+        eps_out: float = 80.0,
+        kappa: float = 0.0,
+        side: ChargeSide | None = None,
     ) -> BemSolution: ...
     def reaction_field_at(self, point: tuple[float, float, float]) -> float: ...
     def reaction_field_at_many(self, points: _F64Array2) -> _F64Array1: ...
+    def write_potential_dx(
+        self,
+        path: str,
+        *,
+        spacing: float = 1.0,
+        padding: float = 5.0,
+        origin: tuple[float, float, float] | None = None,
+        dims: tuple[int, int, int] | None = None,
+    ) -> None: ...
     def interaction_energy(
         self,
         positions: _F64Array2,
@@ -60,9 +72,12 @@ class LinearResponse:
     @staticmethod
     def precompute(
         surface: Surface,
-        media: Dielectric,
-        side: ChargeSide,
         sites: _F64Array2,
+        *,
+        eps_in: float = 4.0,
+        eps_out: float = 80.0,
+        kappa: float = 0.0,
+        side: ChargeSide | None = None,
     ) -> LinearResponse: ...
     @property
     def num_sites(self) -> int: ...
