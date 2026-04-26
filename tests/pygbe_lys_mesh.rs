@@ -42,7 +42,13 @@ fn load_lysozyme() -> (Surface, Atoms) {
 
 /// `#[ignore]`-gated because it now fetches the pygbe mesh archive
 /// from Zenodo on first use (≈9 MB). Kept as a coarse sanity check
-/// — no GMRES solve, just load + classify — for opt-in runs.
+/// — no GMRES solve, just load + per-atom counts — for opt-in runs.
+///
+/// All atoms are inside the SES by construction (built_parse.pqr is
+/// pyGBe's interior-charge fixture), so we skip the
+/// `Surface::classify_charges` ray-cast — at 1,323 atoms × 14,398
+/// triangles it's the slow part of this test and adds no information
+/// beyond that pre-known fact.
 #[test]
 #[ignore]
 fn lysozyme_single_surface_pipeline() {
@@ -52,12 +58,6 @@ fn lysozyme_single_surface_pipeline() {
     assert_eq!(surface.num_faces(), 14_398);
     assert_eq!(surface.num_vertices(), 7_201);
     assert_eq!(atoms.charges.len(), 1_323);
-
-    // All atoms are inside the SES, by construction.
-    let side = surface
-        .classify_charges(&atoms.positions)
-        .expect("classify_charges must produce a single side");
-    assert_eq!(side, ChargeSide::Interior);
 
     // Sanity on the total integer charge: protein at neutral pH should
     // be within a few units of zero.

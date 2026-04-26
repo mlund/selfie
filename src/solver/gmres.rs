@@ -18,7 +18,11 @@ use crate::solver::operator::BemOperator;
 use faer::matrix_free::LinOp;
 use faer::{Mat, MatRef};
 
-const RELATIVE_TOL: f64 = 1e-5;
+// why: 1e-4 matches TABI-PB and is well below the 0.5–5 % validation
+// tolerances used by the Born/Kirkwood/pyGBe gates. Tightening to 1e-5
+// added 2–4 GMRES iterations per solve without measurably improving
+// E_solv accuracy.
+const RELATIVE_TOL: f64 = 1e-4;
 const KRYLOV_DIM: usize = 200;
 const MAX_RESTARTS: usize = 5;
 
