@@ -5,6 +5,43 @@ written in Rust. Computes the electrostatic response of a protein (or any
 closed dielectric object) to a set of point charges, in a continuum-solvent
 model with optional salt screening.
 
+## Overview
+
+Given:
+- a triangulated surface enclosing a low-dielectric cavity (e.g. a protein
+  solvent-excluded surface, SES),
+- an interior and exterior dielectric constant (`ε_in`, `ε_out`),
+- an optional Debye–Hückel inverse length `κ` for the solvent,
+- a set of point charges living on one side of the surface (typically
+  inside the protein),
+
+selfie returns:
+- the surface potential and its normal derivative at each triangle's
+  centroid,
+- the **reaction-field potential** `φ_rf(r)` at any probe point — the
+  polarisation response of the dielectric/ionic environment, free of the
+  direct Coulomb contribution of the source charges,
+- the **solvation energy** `E_solv = ½ ∫ ρ · φ_rf dV` as a derived quantity.
+
+For workflows that evaluate many charge configurations over the same mesh
+(pKa shifts, binding-energy scans, MC pH titration), a precomputed
+linear-response basis reduces every further query to O(N_sites²) linear
+algebra — the boundary-integral equation is linear in the charges, so
+one upfront precompute (one BEM solve per site, with unit charge)
+replaces the entire trajectory of naïve per-trial solves.
+
+Target meshes are SES-like triangulations of real biomolecules —
+lysozyme at 14 k faces solves in ≈ 1.6 s on a laptop, matching
+[pyGBe](https://github.com/pygbe/pygbe)'s reference E_solv to 0.1 %.
+
+A pure-Rust **Gaussian molecular-surface mesher** is built in (Cargo
+feature `mesh`, on by default), so a closed triangulated surface can be
+generated directly from atom positions and radii without an external
+binary like MSMS or NanoShaper. Pre-meshed input is also supported —
+selfie reads standard community mesh + charge formats (MSMS `.vert` /
+`.face` for geometry, PQR for charges) and writes Wavefront OBJ for
+visualisation.
+
 ## Quick start
 
 Not yet on PyPI; install straight from the repository:
@@ -46,9 +83,10 @@ explicitly to override.
 
 `Surface.from_atoms_gaussian` builds a closed, watertight Gaussian
 molecular surface ([TMSmesh-style](https://doi.org/10.1021/ct100376g):
-ρ(r) = Σᵢ exp(d·(1 − r²/Rᵢ²)) at isolevel 1, polygonised with marching
-cubes and lightly Taubin-smoothed) straight from atom positions and
-radii — no MSMS or NanoShaper required.
+ρ(r) = Σᵢ exp(d·(1 − r²/Rᵢ²)) at isolevel 1, polygonised with
+[marching cubes](https://doi.org/10.1145/37402.37422) and lightly
+[Taubin-smoothed](https://doi.org/10.1145/218380.218473)) straight
+from atom positions and radii — no MSMS or NanoShaper required.
 
 ```python
 import selfie as s
@@ -136,43 +174,6 @@ probe = np.array([[0.0, 0.0, z] for z in np.linspace(-10, 10, 21)])
 phi_rf = sol.reaction_field_at_many(probe)
 ```
 
-## Overview
-
-Given:
-- a triangulated surface enclosing a low-dielectric cavity (e.g. a protein
-  solvent-excluded surface),
-- an interior and exterior dielectric constant (`ε_in`, `ε_out`),
-- an optional Debye–Hückel inverse length `κ` for the solvent,
-- a set of point charges living on one side of the surface (typically
-  inside the protein),
-
-selfie returns:
-- the surface potential and its normal derivative at each triangle's
-  centroid,
-- the **reaction-field potential** `φ_rf(r)` at any probe point — the
-  polarisation response of the dielectric/ionic environment, free of the
-  direct Coulomb contribution of the source charges,
-- the **solvation energy** `E_solv = ½ ∫ ρ · φ_rf dV` as a derived quantity.
-
-For workflows that evaluate many charge configurations over the same mesh
-(pKa shifts, binding-energy scans, MC pH titration), a precomputed
-linear-response basis reduces every further query to O(N_sites²) linear
-algebra — the boundary-integral equation is linear in the charges, so
-one upfront precompute (one BEM solve per site, with unit charge)
-replaces the entire trajectory of naïve per-trial solves.
-
-Target meshes are SES-like triangulations of real biomolecules —
-lysozyme at 14 k faces solves in ≈ 1.6 s on a laptop, matching
-[pyGBe](https://github.com/pygbe/pygbe)'s reference E_solv to 0.1 %.
-
-A pure-Rust **Gaussian molecular-surface mesher** is built in (Cargo
-feature `mesh`, on by default), so a closed triangulated surface can be
-generated directly from atom positions and radii without an external
-binary like MSMS or NanoShaper. Pre-meshed input is also supported —
-selfie reads standard community mesh + charge formats (MSMS `.vert` /
-`.face` for geometry, PQR for charges) and writes Wavefront OBJ for
-visualisation.
-
 ## Theory
 
 ### Continuum-electrostatics model
@@ -221,6 +222,32 @@ E_solv(q) = ½ qᵀ G q           with   G_ij = φ_rf_i(r_j)
 where `φ_rf_i(r_j)` is the reaction field at site `j` induced by a unit
 source at site `i`. Pre-computing the `G` matrix once converts any
 downstream charge-assignment sweep into pure linear algebra.
+
+### Discretisation and complexity
+
+Centroid collocation with 3-point barycentric Gauss quadrature on each
+panel (7-point Dunavant near singularities,
+[Wilton-Rao-Glisson](https://doi.org/10.1109/TAP.1984.1143304)
+analytical at the self-panel, plus a 3-point Gauss correction for the
+Yukawa smooth part). The dense `2N × 2N` operator on `N` panels is
+never assembled. Each GMRES iteration applies it via a Barnes-Hut
+octree treecode — solid-harmonic expansion of order `P = 6` for the
+Laplace block, Cartesian Taylor for Yukawa, with an asymmetric
+multipole-acceptance criterion (`θ = 0.80` Laplace, `θ = 0.60` Yukawa)
+matched to the expansion orders. A neighbour-block (restricted-additive-
+Schwarz) preconditioner brings GMRES to a relative residual of `1e-5`
+in roughly 8–15 iterations on biomolecular meshes.
+
+| Stage | Naïve dense BEM | Selfie |
+|---|---|---|
+| Per matvec | `O(N²)` | `O(N log N)` |
+| Memory | `O(N²)` | `O(N)` |
+| Full solve | `O(N² · n_iter)` | `O(N log N · n_iter)` |
+| Linear-response precompute | `n_sites` full solves | `n_sites` full solves |
+| Each post-precompute query | — | `O(n_sites²)` flops |
+
+Mesh evaluation, panel-integral assembly, preconditioner build, and
+treecode walks are all parallelised with [rayon](https://docs.rs/rayon).
 
 ### Units
 
@@ -297,3 +324,11 @@ The end-to-end lysozyme solve is gated behind `--ignored`:
 ```sh
 cargo test --release --features validation --test pygbe_lys_mesh -- --ignored
 ```
+
+## Disclaimer
+
+Substantial portions of this code were drafted with coding-agent
+assistance (Claude Code), human-reviewed and tested. The cited
+papers are the source of truth; analytical references (Born,
+Kirkwood, Onsager) and pyGBe cross-validation are the correctness
+gates.
