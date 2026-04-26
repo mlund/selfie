@@ -27,35 +27,36 @@ import numpy as np
 import selfie as s
 
 surface = s.Surface.icosphere(radius=10.0, subdivisions=5)
-media = s.Dielectric(eps_in=2.0, eps_out=80.0)
-
 positions = np.array([[0.0, 0.0, 0.0]])
 charges = np.array([1.0])
-sol = s.BemSolution.solve(surface, media, s.ChargeSide.Interior, positions, charges)
+sol = s.BemSolution.solve(surface, positions, charges, eps_in=2.0, eps_out=80.0)
 
 u_born = 0.5 * charges[0] * sol.reaction_field_at((0.0, 0.0, 0.0))
 print(f"Born solvation energy: {s.to_kJ_per_mol(u_born):.2f} kJ/mol")
 ```
+
+`eps_in`, `eps_out`, `kappa`, and `side` are keyword-only. Defaults
+are `eps_in=4`, `eps_out=80`, `kappa=0` (no salt), and `side=None`
+(auto-classified via [`Surface.classify_charges`]); pass any of them
+explicitly to override.
 
 ## Usage
 
 ### Building a mesh from atom positions
 
 `Surface.from_atoms_gaussian` builds a closed, watertight Gaussian
-molecular surface (TMSmesh-style: ρ(r) = Σᵢ exp(d·(1 − r²/Rᵢ²)) at
-isolevel 1, polygonised with marching cubes and lightly Taubin-smoothed)
-straight from atom positions and radii — no MSMS or NanoShaper required.
+molecular surface ([TMSmesh-style](https://doi.org/10.1021/ct100376g):
+ρ(r) = Σᵢ exp(d·(1 − r²/Rᵢ²)) at isolevel 1, polygonised with marching
+cubes and lightly Taubin-smoothed) straight from atom positions and
+radii — no MSMS or NanoShaper required.
 
 ```python
 import selfie as s
 
 positions, charges, radii = s.read_pqr("protein.pqr")
-
 surface = s.Surface.from_atoms_gaussian(positions, radii, grid_spacing=1.5)
-side = surface.classify_charges(positions)
-
-media = s.Dielectric(eps_in=4.0, eps_out=80.0, kappa=0.125)  # physiological salt
-sol = s.BemSolution.solve(surface, media, side, positions, charges)
+sol = s.BemSolution.solve(surface, positions, charges,
+                          eps_in=4.0, eps_out=80.0, kappa=0.125)
 ```
 
 `grid_spacing` (Å) is the only resolution knob — smaller gives a finer
@@ -73,19 +74,18 @@ surface.write_obj("protein.obj")
 ### Solving on a pre-built mesh
 
 `Surface.from_msms` reads the standard MSMS `.vert` / `.face` pair;
-`read_pqr` loads atom charges. `classify_charges` detects which side
-of the dielectric boundary the atoms live on, so you don't have to
-hard-code it.
+`read_pqr` loads atom charges and radii. `BemSolution.solve`
+auto-classifies which side of the dielectric boundary the charges
+live on by default — pass `side=s.ChargeSide.Interior` (or
+`Exterior`) to override.
 
 ```python
 import selfie as s
 
 surface = s.Surface.from_msms("Lys1.vert", "Lys1.face")
 positions, charges, _radii = s.read_pqr("built_parse.pqr")
-side = surface.classify_charges(positions)
-
-media = s.Dielectric(eps_in=4.0, eps_out=80.0, kappa=0.125)  # physiological salt
-sol = s.BemSolution.solve(surface, media, side, positions, charges)
+sol = s.BemSolution.solve(surface, positions, charges,
+                          eps_in=4.0, eps_out=80.0, kappa=0.125)
 ```
 
 ### Solvation energy of a protein
@@ -108,7 +108,8 @@ studies), precompute the linear-response basis once and turn every
 downstream query into dense linear algebra:
 
 ```python
-basis = s.LinearResponse.precompute(surface, media, side, sites=positions)
+basis = s.LinearResponse.precompute(surface, positions,
+                                    eps_in=4.0, eps_out=80.0, kappa=0.125)
 
 q1 = charges
 q2 = charges.copy()

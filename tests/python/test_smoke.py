@@ -28,10 +28,9 @@ def test_born_reaction_field_at_center():
     # Single unit charge at the origin of a radius-10 Å sphere,
     # ε_in = 2, ε_out = 80. Closed form: φ_rf(0) = q/a · (1/ε_out − 1/ε_in).
     surf = s.Surface.icosphere(10.0, 3)
-    media = s.Dielectric(eps_in=2.0, eps_out=80.0)
     pos = np.array([[0.0, 0.0, 0.0]])
     q = np.array([1.0])
-    sol = s.BemSolution.solve(surf, media, s.ChargeSide.Interior, pos, q)
+    sol = s.BemSolution.solve(surf, pos, q, eps_in=2.0, eps_out=80.0)
     phi = sol.reaction_field_at((0.0, 0.0, 0.0))
     expected = (1.0 / 80.0 - 1.0 / 2.0) / 10.0
     # 2 % tolerance at subdiv = 3 (centroid collocation is O(h²)).
@@ -41,7 +40,6 @@ def test_born_reaction_field_at_center():
 def test_linear_response_quadratic_scaling():
     # Solvation energy must scale as λ² under uniform charge rescaling.
     surf = s.Surface.icosphere(10.0, 3)
-    media = s.Dielectric(eps_in=2.0, eps_out=80.0)
     sites = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -49,7 +47,7 @@ def test_linear_response_quadratic_scaling():
             [0.0, 3.0, 0.0],
         ]
     )
-    basis = s.LinearResponse.precompute(surf, media, s.ChargeSide.Interior, sites)
+    basis = s.LinearResponse.precompute(surf, sites, eps_in=2.0, eps_out=80.0)
     assert basis.num_sites == 3
 
     q = np.array([1.0, -0.5, 0.3])
@@ -75,8 +73,7 @@ def test_read_pqr_lysozyme_shapes():
 
 def test_charge_length_mismatch_raises_value_error():
     surf = s.Surface.icosphere(10.0, 3)
-    media = s.Dielectric(eps_in=2.0, eps_out=80.0)
     pos = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
     q = np.array([1.0])  # length mismatch vs 2 positions
     with pytest.raises(ValueError, match="mismatch|positions"):
-        s.BemSolution.solve(surf, media, s.ChargeSide.Interior, pos, q)
+        s.BemSolution.solve(surf, pos, q, eps_in=2.0, eps_out=80.0)

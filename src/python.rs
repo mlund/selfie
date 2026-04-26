@@ -283,16 +283,25 @@ impl PyBemSolution {
 
 #[pymethods]
 impl PyBemSolution {
-    /// Solve the Juffer BIE for the given surface, dielectric, side,
-    /// and source charges. `positions` is `(N, 3) float64`,
-    /// `charges` is `(N,) float64`.
+    /// Solve the Juffer BIE for the given surface and source charges.
+    ///
+    /// `positions` is `(N, 3) float64`, `charges` is `(N,) float64`.
+    /// `eps_in`, `eps_out`, `kappa` define the continuum dielectric
+    /// (water at 25 °C ≈ 80; protein interior typically 2–4; `kappa`
+    /// in Å⁻¹ defaults to 0 = no salt screening). `side=None`
+    /// auto-classifies via [`Surface.classify_charges`]; pass an
+    /// explicit `ChargeSide` (or skip the ray-cast cost on huge
+    /// systems) to override.
     #[staticmethod]
+    #[pyo3(signature = (surface, positions, charges, *, eps_in = 4.0, eps_out = 80.0, kappa = 0.0, side = None))]
     fn solve(
         surface: &PySurface,
-        media: &PyDielectric,
-        side: PyChargeSide,
         positions: PyReadonlyArray2<'_, f64>,
         charges: PyReadonlyArray1<'_, f64>,
+        eps_in: f64,
+        eps_out: f64,
+        kappa: f64,
+        side: Option<PyChargeSide>,
     ) -> PyResult<Self> {
         let pos = positions_from_numpy(&positions)?;
         let q = charges.as_slice()?;
@@ -303,15 +312,20 @@ impl PyBemSolution {
                 q.len()
             )));
         }
-        let sol = BemSolution::solve(&surface.inner, media.inner, side.into(), &pos, q)?;
+        let media = Dielectric::continuum_with_salt(eps_in, eps_out, kappa);
+        let side: ChargeSide = match side {
+            Some(s) => s.into(),
+            None => surface.inner.classify_charges(&pos)?,
+        };
+        let sol = BemSolution::solve(&surface.inner, media, side, &pos, q)?;
         // Destructure the Rust solution into owned densities so the
         // Python wrapper can live past the Rust borrow.
         let f = sol.surface_potential().to_vec();
         let h = sol.surface_normal_deriv().to_vec();
         Ok(Self {
             surface: Arc::clone(&surface.inner),
-            media: media.inner,
-            side: side.into(),
+            media,
+            side,
             f,
             h,
         })
@@ -390,16 +404,27 @@ impl PyLinearResponse {
 #[pymethods]
 impl PyLinearResponse {
     /// Build the basis: one unit-charge solve per site, plus the
-    /// symmetrised response matrix.
+    /// symmetrised response matrix. Same media / side conventions as
+    /// [`BemSolution.solve`] — `eps_in`, `eps_out`, `kappa` are
+    /// keyword-only with defaults; `side=None` auto-classifies the
+    /// `sites` against the surface.
     #[staticmethod]
+    #[pyo3(signature = (surface, sites, *, eps_in = 4.0, eps_out = 80.0, kappa = 0.0, side = None))]
     fn precompute(
         surface: &PySurface,
-        media: &PyDielectric,
-        side: PyChargeSide,
         sites: PyReadonlyArray2<'_, f64>,
+        eps_in: f64,
+        eps_out: f64,
+        kappa: f64,
+        side: Option<PyChargeSide>,
     ) -> PyResult<Self> {
         let sites_vec = positions_from_numpy(&sites)?;
-        let lr = LinearResponse::precompute(&surface.inner, media.inner, side.into(), &sites_vec)?;
+        let media = Dielectric::continuum_with_salt(eps_in, eps_out, kappa);
+        let side: ChargeSide = match side {
+            Some(s) => s.into(),
+            None => surface.inner.classify_charges(&sites_vec)?,
+        };
+        let lr = LinearResponse::precompute(&surface.inner, media, side, &sites_vec)?;
         // Drop `lr` to collect per-site densities out of its internal
         // `Vec<BemSolution>`. The public API doesn't expose them
         // directly; re-running basis solves here would duplicate work.
@@ -418,8 +443,8 @@ impl PyLinearResponse {
         for site in &sites_vec {
             let sol = BemSolution::solve(
                 &surface.inner,
-                media.inner,
-                side.into(),
+                media,
+                side,
                 std::slice::from_ref(site),
                 &[1.0],
             )?;
@@ -430,8 +455,8 @@ impl PyLinearResponse {
         }
         Ok(Self {
             surface: Arc::clone(&surface.inner),
-            media: media.inner,
-            side: side.into(),
+            media,
+            side,
             sites: sites_vec,
             densities,
         })
