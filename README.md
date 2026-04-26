@@ -47,9 +47,9 @@ visualisation.
 Not yet on PyPI; install straight from the repository:
 
 ```sh
-uv add "selfie @ git+https://github.com/mlund/selfie.git"
+uv add "bemtzmann @ git+https://github.com/mlund/bemtzmann.git"
 # or, with plain pip:
-pip install "git+https://github.com/mlund/selfie.git"
+pip install "git+https://github.com/mlund/bemtzmann.git"
 ```
 
 The installer builds the native extension via `maturin`; no Rust toolchain
