@@ -8,6 +8,9 @@ fetch.
 
 [pygbe]: https://github.com/pygbe/pygbe
 
+When citing pyGBe, please use the JOSS paper:
+[Cooper et al., *J. Open Source Softw.* **1**(4), 43 (2016)](https://doi.org/10.21105/joss.00043).
+
 ## Upstream license
 
 pyGBe is distributed under the BSD 3-Clause License. The license
