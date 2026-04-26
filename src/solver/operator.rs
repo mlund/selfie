@@ -36,7 +36,7 @@ static FIRST_APPLY: OnceLock<Instant> = OnceLock::new();
 // field acceptance and correspondingly fewer near-field pair
 // integrations — the dominant solver cost. Widen `MAC_THETA_YUKAWA`
 // once Yukawa migrates to an SH basis.
-const MAC_THETA_LAPLACE: f64 = 0.8;
+const MAC_THETA_LAPLACE: f64 = 0.83;
 const MAC_THETA_YUKAWA: f64 = 0.6;
 // Max panels per leaf. Small leaves keep the tree deep enough that
 // MAC passes at shallow levels on cluster-in-cluster geometries like
