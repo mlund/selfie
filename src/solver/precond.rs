@@ -71,8 +71,10 @@ impl LinOp<f64> for BlockJacobi {
             out[(n + a, 0)] = d10.mul_add(r_top, d11 * r_bot);
         }
     }
-    fn conj_apply(&self, _: MatMut<f64>, _: MatRef<f64>, _: Par, _: &mut MemStack) {
-        unreachable!("conj_apply is not called by GMRES on the Juffer preconditioner");
+    fn conj_apply(&self, out: MatMut<f64>, rhs: MatRef<f64>, par: Par, stack: &mut MemStack) {
+        // why: real-valued LinOp — conjugate equals the operator
+        // itself, so delegating is mathematically correct.
+        self.apply(out, rhs, par, stack);
     }
 }
 
@@ -115,8 +117,15 @@ impl NeighborBlock {
         // N=14 k the saving is ~1 s of preconditioner-build time.
         let mut tree: kdtree::KdTree<f64, u32, [f64; 3]> = kdtree::KdTree::new(3);
         for (i, c) in geom.centroids.iter().enumerate() {
-            tree.add(c.to_array(), i as u32)
-                .expect("kd-tree insert is infallible for finite centroids");
+            let result = tree.add(c.to_array(), i as u32);
+            debug_assert!(result.is_ok(), "kdtree::add failed: {result:?}");
+            // SAFETY: `KdTree::add` only fails on `WrongDimension`,
+            // `ZeroCapacity`, or `NonFiniteCoordinate`. The first two
+            // are statically impossible (tree built with `new(3)` and
+            // we feed `[f64; 3]` keys); centroids are finite by mesh
+            // construction. The `debug_assert!` above surfaces any
+            // future regression in test builds.
+            unsafe { result.unwrap_unchecked() };
         }
 
         // `nearest(p, k+1, …)` returns the query point itself first
@@ -126,9 +135,13 @@ impl NeighborBlock {
             .into_par_iter()
             .flat_map_iter(|a| {
                 let ca = geom.centroids[a].to_array();
-                let hits = tree
-                    .nearest(&ca, k + 1, &kdtree::distance::squared_euclidean)
-                    .expect("kd-tree query never fails for finite input");
+                let hits = tree.nearest(&ca, k + 1, &kdtree::distance::squared_euclidean);
+                debug_assert!(hits.is_ok(), "kdtree::nearest failed: {hits:?}");
+                // SAFETY: `nearest` errors only on `WrongDimension`
+                // (impossible — 3-dim tree, 3-dim query) or `Empty`
+                // (excluded by the `debug_assert!(k < n)` at entry,
+                // so the tree has ≥ k+1 entries).
+                let hits = unsafe { hits.unwrap_unchecked() };
                 std::iter::once(a as u32).chain(
                     hits.into_iter()
                         .map(|(_, &idx)| idx)
@@ -150,12 +163,14 @@ impl NeighborBlock {
                     let pb = nbrs[j / 2] as usize;
                     let (k0, k0p, kk, kkp) = block_entries(geom, pa, pb, kappa);
                     let half = if pa == pb { 0.5 } else { 0.0 };
-                    match (i % 2, j % 2) {
-                        (0, 0) => half + k0p,
-                        (0, 1) => -eps_ratio * k0,
-                        (1, 0) => half - kkp,
-                        (1, _) => kk,
-                        _ => unreachable!(),
+                    // why: matching on `(bool, bool)` is exhaustive at
+                    // four arms, so no `_ => unreachable!()` panic
+                    // branch survives in release.
+                    match (i % 2 == 0, j % 2 == 0) {
+                        (true, true) => half + k0p,
+                        (true, false) => -eps_ratio * k0,
+                        (false, true) => half - kkp,
+                        (false, false) => kk,
                     }
                 });
                 mat.partial_piv_lu()
@@ -211,7 +226,9 @@ impl LinOp<f64> for NeighborBlock {
             out[(n + a, 0)] = bot;
         }
     }
-    fn conj_apply(&self, _: MatMut<f64>, _: MatRef<f64>, _: Par, _: &mut MemStack) {
-        unreachable!("conj_apply is not called by GMRES on the Juffer preconditioner");
+    fn conj_apply(&self, out: MatMut<f64>, rhs: MatRef<f64>, par: Par, stack: &mut MemStack) {
+        // why: real-valued LinOp — conjugate equals the operator
+        // itself, so delegating is mathematically correct.
+        self.apply(out, rhs, par, stack);
     }
 }

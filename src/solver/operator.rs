@@ -18,6 +18,7 @@ use crate::solver::treecode::PointTreecode;
 use faer::dyn_stack::{MemStack, StackReq};
 use faer::matrix_free::LinOp;
 use faer::{MatMut, MatRef, Par};
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -83,7 +84,16 @@ impl LinOp<f64> for BemOperator<'_> {
             Instant::now()
         });
         let n = self.geom.len();
-        let x: Vec<f64> = rhs.col(0).iter().copied().collect();
+        // why: faer_gmres stores its Krylov basis as a column-major
+        // contiguous Mat, so `try_as_col_major` succeeds on every
+        // GMRES call and we borrow `&[f64]` directly — no per-iter
+        // allocation. The owned fallback is only there in case a
+        // future caller hands in a strided view.
+        let x: Cow<'_, [f64]> = rhs
+            .col(0)
+            .try_as_col_major()
+            .map(|c| Cow::Borrowed(c.as_slice()))
+            .unwrap_or_else(|| Cow::Owned(rhs.col(0).iter().copied().collect()));
         let (x_f, x_h) = x.split_at(n);
 
         let (top, bot) = self
@@ -108,11 +118,12 @@ impl LinOp<f64> for BemOperator<'_> {
         }
     }
 
-    fn conj_apply(&self, _: MatMut<f64>, _: MatRef<f64>, _: Par, _: &mut MemStack) {
-        // faer_gmres's Arnoldi iteration only ever calls `apply`, so
-        // this path is unreachable on the non-self-adjoint Juffer
-        // operator. If a BiCGStab / normal-equations solver is ever
-        // plugged in, implement A^T · x here.
-        unreachable!("conj_apply is not called by GMRES on the Juffer operator");
+    fn conj_apply(&self, out: MatMut<f64>, rhs: MatRef<f64>, par: Par, stack: &mut MemStack) {
+        // why: `LinOp<f64>` is a real-valued operator, so the
+        // mathematical conjugate of A is A itself; delegating to
+        // `apply` is correct (not a placeholder). GMRES never calls
+        // this on the Juffer operator anyway, but a future BiCGStab
+        // plugin would get the right answer for free.
+        self.apply(out, rhs, par, stack);
     }
 }
