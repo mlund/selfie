@@ -3,16 +3,20 @@
 //! Pipeline: read a structure file → build a Gaussian molecular surface →
 //! optionally write OBJ → optionally compute solvation free energy. The
 //! whole binary is gated by the `cli` feature via `required-features` in
-//! Cargo.toml; the library itself never links `clap` or `env_logger`.
+//! Cargo.toml; the library itself never links `clap`, `env_logger`, or
+//! `indicatif`.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-use clap::{Parser, ValueEnum};
-use log::LevelFilter;
 use bemtzmann::io::{Atoms, read_pqr, read_xyz};
 use bemtzmann::units::to_kJ_per_mol;
 use bemtzmann::{BemSolution, ChargeSide, Dielectric, Error, Surface};
+use clap::{Parser, ValueEnum};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif_log_bridge::LogWrapper;
+use log::LevelFilter;
 
 const KCAL_PER_KJ: f64 = 1.0 / 4.184;
 
@@ -70,7 +74,7 @@ struct Cli {
     #[arg(long, default_value_t = 5.0)]
     potential_padding: f64,
 
-    /// Increase log verbosity (-v = info, -vv = debug). Default: warnings only.
+    /// Increase log verbosity (-v = debug, -vv = trace). Default: info.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 }
@@ -90,8 +94,8 @@ enum SideArg {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    init_logger(cli.verbose);
-    match run(&cli) {
+    let multi = init_logger(cli.verbose);
+    match run(&cli, &multi) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -103,29 +107,81 @@ fn main() -> ExitCode {
     }
 }
 
-fn init_logger(verbose: u8) {
+/// Wires `env_logger` through `indicatif-log-bridge` so log records
+/// suspend any active progress bar instead of tearing it. Returns the
+/// shared [`MultiProgress`] every spinner must be added to.
+fn init_logger(verbose: u8) -> MultiProgress {
     let level = match verbose {
-        0 => LevelFilter::Warn,
-        1 => LevelFilter::Info,
-        _ => LevelFilter::Debug,
+        0 => LevelFilter::Info,
+        1 => LevelFilter::Debug,
+        _ => LevelFilter::Trace,
     };
-    env_logger::Builder::new()
+    let logger = env_logger::Builder::new()
         .filter_level(level)
         .format_target(false)
-        .init();
+        .build();
+    let multi = MultiProgress::new();
+    // why: try_init can fail only if a global logger is already set,
+    // which never happens in our binary; ignore the result and continue.
+    let _ = LogWrapper::new(multi.clone(), logger).try_init();
+    log::set_max_level(level);
+    multi
 }
 
-fn run(cli: &Cli) -> Result<(), Error> {
+/// Indeterminate spinner with a steady tick. Must be added to the shared
+/// [`MultiProgress`] so log records (e.g. GMRES progress) coexist cleanly.
+fn spinner(multi: &MultiProgress, msg: String) -> ProgressBar {
+    let pb = multi.add(ProgressBar::new_spinner());
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {elapsed:>4} {msg}")
+            .expect("static template literal is well-formed"),
+    );
+    pb.set_message(msg);
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb
+}
+
+/// Determinate progress bar for a known-length workload (e.g. grid points).
+fn progress_bar(multi: &MultiProgress, total: u64, msg: String) -> ProgressBar {
+    let pb = multi.add(ProgressBar::new(total));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.cyan} {elapsed:>4} [{bar:30.cyan/blue}] {pos}/{len} ({percent}%) ETA {eta} {msg}",
+        )
+        .expect("static template literal is well-formed")
+        .progress_chars("=> "),
+    );
+    pb.set_message(msg);
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb
+}
+
+fn run(cli: &Cli, multi: &MultiProgress) -> Result<(), Error> {
     let atoms = load_atoms(&cli.structure, cli.format)?;
-    println!(
+    log::info!(
         "Loaded {} atoms from {}",
         atoms.charges.len(),
         cli.structure.display()
     );
 
-    let surface = Surface::from_atoms_gaussian(&atoms.positions, &atoms.radii, cli.grid_spacing)?;
+    let surface = {
+        let pb = spinner(
+            multi,
+            format!(
+                "Building Gaussian molecular surface (Δ = {:.2} Å)...",
+                cli.grid_spacing
+            ),
+        );
+        let t0 = Instant::now();
+        let surface =
+            Surface::from_atoms_gaussian(&atoms.positions, &atoms.radii, cli.grid_spacing)?;
+        pb.finish_and_clear();
+        log::debug!("Mesh built in {:.2?}", t0.elapsed());
+        surface
+    };
+
     let area: f64 = surface.face_areas().iter().sum();
-    println!(
+    log::info!(
         "Mesh: {} vertices, {} faces, surface area {:.1} Å²",
         surface.num_vertices(),
         surface.num_faces(),
@@ -134,7 +190,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
 
     if let Some(obj_path) = &cli.obj {
         surface.write_obj(obj_path)?;
-        println!("Wrote {}", obj_path.display());
+        log::info!("Wrote {}", obj_path.display());
     }
 
     // why: `--potential-dx` needs a solved BemSolution too, so it
@@ -143,14 +199,28 @@ fn run(cli: &Cli) -> Result<(), Error> {
     if needs_solve {
         let side = resolve_side(&surface, &atoms.positions, cli.side)?;
         let media = Dielectric::continuum_with_salt(cli.eps_in, cli.eps_out, cli.kappa);
-        let solution =
-            BemSolution::solve(&surface, media, side, &atoms.positions, &atoms.charges)?;
+        log::info!(
+            "Solving BEM system (ε_in = {:.2}, ε_out = {:.2}, κ = {:.3} Å⁻¹, {} panels)...",
+            cli.eps_in,
+            cli.eps_out,
+            cli.kappa,
+            surface.num_faces()
+        );
+        let solution = {
+            let pb = spinner(multi, "Running GMRES...".to_string());
+            let t0 = Instant::now();
+            let solution =
+                BemSolution::solve(&surface, media, side, &atoms.positions, &atoms.charges)?;
+            pb.finish_and_clear();
+            log::debug!("Solver finished in {:.2?}", t0.elapsed());
+            solution
+        };
 
         if cli.solve {
             let e_reduced = solvation_energy_from(&solution, &atoms)?;
             let e_kj = to_kJ_per_mol(e_reduced);
             let e_kcal = e_kj * KCAL_PER_KJ;
-            println!(
+            log::info!(
                 "E_solv = {e_kj:+.2} kJ/mol  ({e_kcal:+.2} kcal/mol)  [{e_reduced:+.4} e²/Å]"
             );
         }
@@ -161,8 +231,10 @@ fn run(cli: &Cli) -> Result<(), Error> {
                 cli.potential_spacing,
                 cli.potential_padding,
             );
-            solution.write_potential_dx(dx_path, origin, spacing, dims)?;
-            println!(
+            let t0 = Instant::now();
+            sample_and_write_dx(multi, &solution, dx_path, origin, spacing, dims)?;
+            log::debug!("Potential grid written in {:.2?}", t0.elapsed());
+            log::info!(
                 "Wrote {} (potential grid {}×{}×{}, spacing {:.2} Å)",
                 dx_path.display(),
                 dims[0],
@@ -208,7 +280,7 @@ fn resolve_side(
         SideArg::Exterior => (ChargeSide::Exterior, "forced"),
         SideArg::Auto => (surface.classify_charges(positions)?, "auto-classified"),
     };
-    println!("Charge side: {} ({source})", side_label(side));
+    log::info!("Charge side: {} ({source})", side_label(side));
     Ok(side)
 }
 
@@ -230,10 +302,92 @@ fn solvation_energy_from(solution: &BemSolution<'_>, atoms: &Atoms) -> Result<f6
     Ok(0.5 * dot)
 }
 
+/// Sample `φ_rf` on a regular grid one x-slab at a time, writing the
+/// result as an OpenDX (`.dx`) volume. Mirrors
+/// `BemSolution::write_potential_dx`, but chunks the parallel sampling
+/// per slab so the CLI can drive a determinate progress bar from
+/// `n_total` known points. Library callers without a progress bar should
+/// keep using `write_potential_dx`.
+fn sample_and_write_dx(
+    multi: &MultiProgress,
+    solution: &BemSolution<'_>,
+    path: &Path,
+    origin: [f64; 3],
+    spacing: [f64; 3],
+    dims: [usize; 3],
+) -> Result<(), Error> {
+    use std::io::Write;
+    let [nx, ny, nz] = dims;
+    let n_total = nx * ny * nz;
+    let slab_len = ny * nz;
+
+    let io_err = |e: std::io::Error| Error::Io {
+        path: path.display().to_string(),
+        reason: e.to_string(),
+    };
+
+    // why: APBS / OpenDX storage order is x outermost, z innermost.
+    // Sampling a full x-slab per call keeps rayon's per-point parallelism
+    // while giving us nx synchronisation points to update the bar.
+    let mut values = vec![0.0_f64; n_total];
+    let mut slab_points: Vec<[f64; 3]> = Vec::with_capacity(slab_len);
+    let pb = progress_bar(
+        multi,
+        n_total as u64,
+        format!("Sampling reaction-field potential on {nx}×{ny}×{nz} grid"),
+    );
+    for i in 0..nx {
+        slab_points.clear();
+        let x = origin[0] + i as f64 * spacing[0];
+        for j in 0..ny {
+            let y = origin[1] + j as f64 * spacing[1];
+            for k in 0..nz {
+                let z = origin[2] + k as f64 * spacing[2];
+                slab_points.push([x, y, z]);
+            }
+        }
+        let slab_offset = i * slab_len;
+        let slab_out = &mut values[slab_offset..slab_offset + slab_len];
+        solution.reaction_field_at_many(&slab_points, slab_out)?;
+        pb.inc(slab_len as u64);
+    }
+    pb.finish_and_clear();
+
+    let file = std::fs::File::create(path).map_err(io_err)?;
+    let mut w = std::io::BufWriter::new(file);
+    writeln!(w, "# OpenDX scalar field — reaction-field potential φ_rf (reduced units, e/Å)")
+        .map_err(io_err)?;
+    writeln!(w, "# Generated by BEMtzmann").map_err(io_err)?;
+    writeln!(w, "object 1 class gridpositions counts {nx} {ny} {nz}").map_err(io_err)?;
+    writeln!(w, "origin {} {} {}", origin[0], origin[1], origin[2]).map_err(io_err)?;
+    writeln!(w, "delta {} 0 0", spacing[0]).map_err(io_err)?;
+    writeln!(w, "delta 0 {} 0", spacing[1]).map_err(io_err)?;
+    writeln!(w, "delta 0 0 {}", spacing[2]).map_err(io_err)?;
+    writeln!(w, "object 2 class gridconnections counts {nx} {ny} {nz}").map_err(io_err)?;
+    writeln!(w, "object 3 class array type double rank 0 items {n_total} data follows")
+        .map_err(io_err)?;
+    for chunk in values.chunks(3) {
+        for (i, v) in chunk.iter().enumerate() {
+            if i > 0 {
+                write!(w, " ").map_err(io_err)?;
+            }
+            write!(w, "{v:.7e}").map_err(io_err)?;
+        }
+        writeln!(w).map_err(io_err)?;
+    }
+    writeln!(w, "attribute \"dep\" string \"positions\"").map_err(io_err)?;
+    writeln!(w, "object \"regular positions regular connections\" class field")
+        .map_err(io_err)?;
+    writeln!(w, "component \"positions\" value 1").map_err(io_err)?;
+    writeln!(w, "component \"connections\" value 2").map_err(io_err)?;
+    writeln!(w, "component \"data\" value 3").map_err(io_err)?;
+    w.flush().map_err(io_err)?;
+    Ok(())
+}
+
 /// Build a regular cubic grid spanning the atom bounding box plus
 /// `padding` on every side, with isotropic `spacing` Å steps. Returns
-/// `(origin, [spacing; 3], dims)` ready to feed into
-/// `BemSolution::write_potential_dx`.
+/// `(origin, [spacing; 3], dims)` ready to feed into the DX sampler.
 fn derive_potential_grid(
     positions: &[[f64; 3]],
     spacing: f64,

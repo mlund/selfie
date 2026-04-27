@@ -21,7 +21,7 @@ default = ["mesh", "cli"]
 # On by default; disable with `default-features = false` for a leaner build.
 mesh = []
 # Command-line binary `bemtzmann` — pipeline shell over the library.
-cli = ["dep:clap", "dep:env_logger", "mesh"]
+cli = ["dep:clap", "dep:env_logger", "dep:indicatif", "dep:indicatif-log-bridge", "mesh"]
 # Compile the Kirkwood analytical reference (otherwise gated to #[cfg(test)]).
 # Intended for benchmarks/examples that need the reference at runtime.
 validation = []
@@ -39,6 +39,10 @@ rayon = "1.12.0"
 thiserror = "2"
 clap = { version = "4.6.1", features = ["derive"], optional = true }
 env_logger = { version = "0.11", optional = true }
+indicatif = { version = "0.18", optional = true }
+# why: routes log records through `MultiProgress` so per-iteration log
+# lines (e.g. GMRES progress) don't tear an active spinner.
+indicatif-log-bridge = { version = "0.2", optional = true }
 pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"], optional = true }
 numpy = { version = "0.28", optional = true }
 

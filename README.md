@@ -52,9 +52,10 @@ uv add "bemtzmann @ git+https://github.com/mlund/bemtzmann.git"
 pip install "git+https://github.com/mlund/bemtzmann.git"
 ```
 
-The installer builds the native extension via `maturin`; no Rust toolchain
-on the user side is needed at install time if a prebuilt wheel is
-available, otherwise `cargo` is pulled in automatically.
+The installer builds the native extension via `maturin`; no
+[Rust toolchain](https://www.rust-lang.org/tools/install) on the user
+side is needed at install time if a prebuilt wheel is available,
+otherwise `cargo` is pulled in automatically.
 
 Minimal working example — a single unit charge at the centre of a
 dielectric sphere, compared against the Born closed form:
@@ -76,6 +77,23 @@ print(f"Born solvation energy: {bm.to_kJ_per_mol(u_born):.2f} kJ/mol")
 are `eps_in=4`, `eps_out=80`, `kappa=0` (no salt), and `side=None`
 (auto-classified via [`Surface.classify_charges`]); pass any of them
 explicitly to override.
+
+## Command-line interface
+
+A standalone `bemtzmann` binary (Cargo feature `cli`, on by default)
+covers the same pipeline without a Python interpreter: read a
+structure file (PQR or XYZ) → build a Gaussian molecular surface →
+optionally write the mesh as OBJ → optionally solve and report the
+solvation energy → optionally sample the reaction-field potential
+on a regular 3D grid as OpenDX.
+
+Install from the repository with [cargo](https://www.rust-lang.org/tools/install):
+
+```sh
+cargo install --git https://github.com/mlund/bemtzmann.git
+```
+
+Run `bemtzmann --help` for the full list of flags.
 
 ## Usage
 
