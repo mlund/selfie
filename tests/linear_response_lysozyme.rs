@@ -22,8 +22,8 @@ mod common;
 #[ignore]
 fn lysozyme_basis_matches_direct_solve() {
     let dir = common::pygbe_lysozyme_dir();
-    let (vertices, faces) = read_msms(dir.join("Lys1.vert"), dir.join("Lys1.face")).unwrap();
-    let surface = Surface::from_mesh(&vertices, &faces).unwrap();
+    let mesh = read_msms(dir.join("Lys1.vert"), dir.join("Lys1.face")).unwrap();
+    let surface = Surface::from_mesh(&mesh.vertices, &mesh.faces).unwrap();
     let charge_pqr: PathBuf =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/pygbe_lys/built_parse.pqr");
     let atoms = read_pqr(&charge_pqr).unwrap();
@@ -51,7 +51,7 @@ fn lysozyme_basis_matches_direct_solve() {
     let direct = BemSolution::solve(&surface, media, ChargeSide::Interior, &sites, &q).unwrap();
     let mut direct_energy = 0.0;
     for (j, &_v) in q.iter().enumerate() {
-        direct_energy += direct.interaction_energy(&sites, &q, 0, j).unwrap();
+        direct_energy += direct.interaction_energy(&sites, &q, j).unwrap();
     }
     direct_energy *= 0.5;
 

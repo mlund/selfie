@@ -135,6 +135,18 @@ impl<'s> LinearResponse<'s> {
         self.bases.len()
     }
 
+    /// Crate-internal: consume the basis and yield each site's
+    /// `(f, h)` densities. Lets the Python wrapper carry the basis
+    /// across the FFI boundary without re-solving — the BemSolutions
+    /// themselves can't cross because they borrow `&'s Surface`.
+    #[cfg(feature = "python")]
+    pub(crate) fn into_densities(self) -> Vec<(Vec<f64>, Vec<f64>)> {
+        self.bases
+            .into_iter()
+            .map(BemSolution::into_densities)
+            .collect()
+    }
+
     /// Solvation energy `½ qᵀ G q` (reduced units `e²/Å`). `O(N²)`.
     ///
     /// # Errors
@@ -170,9 +182,7 @@ impl<'s> LinearResponse<'s> {
         // the `chunks_exact(n).zip(charges)` walk presents contiguous
         // f64 stripes paired with one charge each, which LLVM folds
         // into FMA accumulation over `j`.
-        for out_j in out.iter_mut().take(n) {
-            *out_j = 0.0;
-        }
+        out[..n].fill(0.0);
         for (row, &qi) in self.response_matrix.chunks_exact(n).zip(charges) {
             for (out_j, &g) in out.iter_mut().take(n).zip(row) {
                 *out_j += qi * g;
@@ -293,7 +303,7 @@ mod tests {
                 .expect("direct solve");
             let mut direct_energy = 0.0;
             for (j, &_q) in qs.iter().enumerate() {
-                direct_energy += direct.interaction_energy(&sites, &qs, 0, j).unwrap();
+                direct_energy += direct.interaction_energy(&sites, &qs, j).unwrap();
             }
             direct_energy *= 0.5;
             // why: GMRES residual is `RELATIVE_TOL = 1e-4` per solve, so the
@@ -371,7 +381,7 @@ mod tests {
             .expect("direct solve");
         let mut direct_energy = 0.0;
         for j in 0..qs.len() {
-            direct_energy += direct.interaction_energy(&sites, &qs, 0, j).unwrap();
+            direct_energy += direct.interaction_energy(&sites, &qs, j).unwrap();
         }
         direct_energy *= 0.5;
         let rel = (basis_energy - direct_energy).abs() / direct_energy.abs();

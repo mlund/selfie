@@ -50,7 +50,7 @@ pub fn read_msms(vert_path: impl AsRef<Path>, face_path: impl AsRef<Path>) -> Re
         vertices.len(),
         faces.len()
     );
-    Ok((vertices, faces))
+    Ok(Mesh { vertices, faces })
 }
 
 /// pygbe-style MSMS `.vert` files often store three vertices per face with
@@ -177,7 +177,10 @@ mod tests {
             "0.0 0.0 0.0\n1.0 0.0 0.0\n0.0 1.0 0.0\n0.0 0.0 1.0\n",
         );
         let face = write_tmp(&dir, "t.face", "1 2 3\n1 4 2\n1 3 4\n2 4 3\n");
-        let (verts, faces) = read_msms(&vert, &face).unwrap();
+        let Mesh {
+            vertices: verts,
+            faces,
+        } = read_msms(&vert, &face).unwrap();
         assert_eq!(verts.len(), 4);
         assert_eq!(faces.len(), 4);
         assert_eq!(verts[0], [0.0, 0.0, 0.0]);
@@ -195,7 +198,10 @@ mod tests {
              0.0 1.0 0.0 0.0 1.0 0.0 3 8 extra\n",
         );
         let face = write_tmp(&dir, "t.face", "1 2 3 region=0 label=xx\n");
-        let (verts, faces) = read_msms(&vert, &face).unwrap();
+        let Mesh {
+            vertices: verts,
+            faces,
+        } = read_msms(&vert, &face).unwrap();
         assert_eq!(verts[0], [0.0, 0.0, 0.0]);
         assert_eq!(faces[0], [0, 1, 2]);
     }
@@ -206,7 +212,10 @@ mod tests {
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/pygbe_sphere");
         let vert = root.join("sphere500_R4.vert");
         let face = root.join("sphere500_R4.face");
-        let (verts, faces) = read_msms(vert, face).unwrap();
+        let Mesh {
+            vertices: verts,
+            faces,
+        } = read_msms(vert, face).unwrap();
         // sphere500_R4: the "500" in the filename is approximate — the
         // actual mesh as shipped has 512 faces / 258 vertices.
         assert!(!faces.is_empty());

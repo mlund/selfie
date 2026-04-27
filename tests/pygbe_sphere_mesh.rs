@@ -29,8 +29,9 @@ fn bem_reproduces_pygbe_sphere_via_file_io() {
     let face = test_data("sphere500_R4.face");
     let pqr = test_data("offcenter_R2.pqr");
 
-    let (vertices, faces) = read_msms(&vert, &face).expect("failed to read MSMS mesh");
-    let surface = Surface::from_mesh(&vertices, &faces).expect("from_mesh rejected the mesh");
+    let mesh = read_msms(&vert, &face).expect("failed to read MSMS mesh");
+    let surface =
+        Surface::from_mesh(&mesh.vertices, &mesh.faces).expect("from_mesh rejected the mesh");
     let atoms = read_pqr(&pqr).expect("failed to read PQR");
 
     let side = surface
@@ -83,8 +84,9 @@ fn exterior_charge_on_pygbe_sphere_matches_kirkwood() {
 
     let vert = test_data("sphere500_R4.vert");
     let face = test_data("sphere500_R4.face");
-    let (vertices, faces) = read_msms(&vert, &face).expect("failed to read MSMS mesh");
-    let surface = Surface::from_mesh(&vertices, &faces).expect("from_mesh rejected the mesh");
+    let mesh = read_msms(&vert, &face).expect("failed to read MSMS mesh");
+    let surface =
+        Surface::from_mesh(&mesh.vertices, &mesh.faces).expect("from_mesh rejected the mesh");
 
     let a = 4.0;
     let eps_in = 4.0;

@@ -71,18 +71,6 @@ fn faces_from_numpy(arr: &PyReadonlyArray2<'_, u32>) -> PyResult<Vec<[u32; 3]>> 
         .collect())
 }
 
-fn surface_bbox(verts: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
-    for v in verts {
-        for ((l, h), &c) in lo.iter_mut().zip(hi.iter_mut()).zip(v) {
-            *l = l.min(c);
-            *h = h.max(c);
-        }
-    }
-    (lo, hi)
-}
-
 fn positions_to_numpy<'py>(py: Python<'py>, positions: &[[f64; 3]]) -> Bound<'py, PyArray2<f64>> {
     let n = positions.len();
     let flat: Vec<f64> = positions.iter().flat_map(|p| p.iter().copied()).collect();
@@ -203,8 +191,8 @@ impl PySurface {
     /// Surface in one call.
     #[staticmethod]
     fn from_msms(vert_path: &str, face_path: &str) -> PyResult<Self> {
-        let (vertices, faces) = crate::io::read_msms(vert_path, face_path)?;
-        let surface = Surface::from_mesh(&vertices, &faces)?;
+        let mesh = crate::io::read_msms(vert_path, face_path)?;
+        let surface = Surface::from_mesh(&mesh.vertices, &mesh.faces)?;
         Ok(Self {
             inner: Arc::new(surface),
         })
@@ -385,7 +373,7 @@ impl PyBemSolution {
         let (origin, dims) = match (origin, dims) {
             (Some(o), Some(d)) => (o, d),
             (None, None) => {
-                let (lo, hi) = surface_bbox(self.surface.vertices());
+                let (lo, hi) = crate::geometry::bbox(self.surface.vertices());
                 let mut o = [0.0_f64; 3];
                 let mut d = [0_usize; 3];
                 for axis in 0..3 {
@@ -413,12 +401,11 @@ impl PyBemSolution {
         &self,
         positions: PyReadonlyArray2<'_, f64>,
         charges: PyReadonlyArray1<'_, f64>,
-        i: usize,
         j: usize,
     ) -> PyResult<f64> {
         let pos = positions_from_numpy(&positions)?;
         let q = charges.as_slice()?;
-        Ok(self.as_solution().interaction_energy(&pos, q, i, j)?)
+        Ok(self.as_solution().interaction_energy(&pos, q, j)?)
     }
 }
 
@@ -480,35 +467,14 @@ impl PyLinearResponse {
             Some(s) => s.into(),
             None => surface.inner.classify_charges(&sites_vec)?,
         };
+        // why: `LinearResponse` already runs one BEM solve per site
+        // and owns the densities, but the BemSolutions inside borrow
+        // the Surface lifetime, which can't cross the Python FFI
+        // boundary. `into_densities` consumes the basis and moves
+        // each site's `(f, h)` Vecs out by value — same physics,
+        // half the solves of the previous "drop and re-solve" path.
         let lr = LinearResponse::precompute(&surface.inner, media, side, &sites_vec)?;
-        // Drop `lr` to collect per-site densities out of its internal
-        // `Vec<BemSolution>`. The public API doesn't expose them
-        // directly; re-running basis solves here would duplicate work.
-        // Instead we re-solve on a fresh SolveContext through the
-        // existing `BemSolution::solve` path, once per site. Same
-        // work, cleaner ownership.
-        //
-        // why: future follow-up could expose an internal iterator
-        // that yields `(f, h)` pairs from the LinearResponse state
-        // directly without duplicating the solves. For now the
-        // precompute cost is dominated by GMRES, not setup, so
-        // the O(N_sites) duplication is tolerable in exchange for
-        // staying on public Rust APIs.
-        drop(lr);
-        let mut densities = Vec::with_capacity(sites_vec.len());
-        for site in &sites_vec {
-            let sol = BemSolution::solve(
-                &surface.inner,
-                media,
-                side,
-                std::slice::from_ref(site),
-                &[1.0],
-            )?;
-            densities.push((
-                sol.surface_potential().to_vec(),
-                sol.surface_normal_deriv().to_vec(),
-            ));
-        }
+        let densities = lr.into_densities();
         Ok(Self {
             surface: Arc::clone(&surface.inner),
             media,

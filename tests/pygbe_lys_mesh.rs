@@ -29,8 +29,8 @@ fn load_lysozyme_at(resolution: &str) -> (Surface, Atoms) {
     let dir = common::pygbe_lysozyme_dir();
     let vert = dir.join(format!("Lys{resolution}.vert"));
     let face = dir.join(format!("Lys{resolution}.face"));
-    let (vertices, faces) = read_msms(&vert, &face).expect("read_msms");
-    let surface = Surface::from_mesh(&vertices, &faces)
+    let mesh = read_msms(&vert, &face).expect("read_msms");
+    let surface = Surface::from_mesh(&mesh.vertices, &mesh.faces)
         .expect("lysozyme mesh should be a closed orientable 2-manifold");
     let atoms = read_pqr(charge_fixture()).expect("read_pqr");
     (surface, atoms)
@@ -114,7 +114,7 @@ fn lysozyme_full_solve() {
     let e_solv_reduced: f64 = (0..atoms.charges.len())
         .map(|j| {
             solution
-                .interaction_energy(&atoms.positions, &atoms.charges, j, j)
+                .interaction_energy(&atoms.positions, &atoms.charges, j)
                 .expect("interaction_energy")
         })
         .sum::<f64>()
@@ -150,7 +150,7 @@ fn solve_and_report(label: &str, surface: &Surface, atoms: &Atoms) -> f64 {
     let elapsed = t.elapsed().as_secs_f64();
     let e_solv_reduced: f64 = (0..atoms.charges.len())
         .map(|j| {
-            sol.interaction_energy(&atoms.positions, &atoms.charges, j, j)
+            sol.interaction_energy(&atoms.positions, &atoms.charges, j)
                 .expect("interaction_energy")
         })
         .sum::<f64>()

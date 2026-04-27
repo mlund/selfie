@@ -24,8 +24,13 @@ use std::fs::File;
 use std::path::Path;
 
 /// Parsed mesh as returned by [`read_msms`]. Pass to
-/// [`crate::Surface::from_mesh`] as `from_mesh(&mesh.0, &mesh.1)`.
-pub type Mesh = (Vec<[f64; 3]>, Vec<[u32; 3]>);
+/// [`crate::Surface::from_mesh`] as
+/// `from_mesh(&mesh.vertices, &mesh.faces)`.
+#[derive(Debug, Clone)]
+pub struct Mesh {
+    pub vertices: Vec<[f64; 3]>,
+    pub faces: Vec<[u32; 3]>,
+}
 
 /// Open a file for reading, mapping I/O errors into [`Error::Io`] with
 /// the path embedded for diagnostics.

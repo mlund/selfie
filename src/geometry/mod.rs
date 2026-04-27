@@ -15,6 +15,21 @@ use panel::FaceGeoms;
 use std::io::Write;
 use std::path::Path;
 
+/// Axis-aligned bounding box of a point cloud as `(lo, hi)` per axis.
+/// Empty input gives `lo = +∞`, `hi = -∞`; callers should guard.
+#[cfg(feature = "python")]
+pub(crate) fn bbox(points: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in points {
+        for ((l, h), &c) in lo.iter_mut().zip(hi.iter_mut()).zip(p) {
+            *l = l.min(c);
+            *h = h.max(c);
+        }
+    }
+    (lo, hi)
+}
+
 /// A closed, outward-oriented triangulated boundary.
 ///
 /// Invariants maintained after construction:

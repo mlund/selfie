@@ -102,6 +102,15 @@ impl<'s> BemSolution<'s> {
         &self.h
     }
 
+    /// Crate-internal: consume the solution and move out the
+    /// `(f, h)` density Vecs without copying. Used by the Python
+    /// wrapper to materialise per-site densities from a
+    /// [`LinearResponse`] without re-solving.
+    #[cfg(feature = "python")]
+    pub(crate) fn into_densities(self) -> (Vec<f64>, Vec<f64>) {
+        (self.f, self.h)
+    }
+
     /// Reaction-field potential at a probe point (reduced units, e/Å).
     ///
     /// For interior solves the evaluator uses the Laplace Green's function
@@ -244,17 +253,19 @@ impl<'s> BemSolution<'s> {
         Ok(())
     }
 
-    /// Reaction-field contribution to the pairwise interaction energy
-    /// `W_ij` between charge `i` and charge `j` (reduced units, e²/Å).
+    /// Reaction-field contribution to charge `j`'s self-interaction
+    /// `q_j · φ_rf(r_j)` (reduced units, e²/Å), evaluated against the
+    /// already-built solution.
     ///
-    /// Equals `q_j · φ_rf(r_j)` when the solve was seeded with the source
-    /// charge `q_i` at `r_i`. The caller passes the same arrays that were
-    /// used in [`Self::solve`] so we can index `i` and `j` consistently.
+    /// Note: `φ_rf` was computed once for *all* source charges, so the
+    /// returned value already includes the cross-terms with every other
+    /// charge — it is the contribution of site `j` to `2 · E_solv`, not
+    /// the pairwise W_ij. The caller passes the same arrays used in
+    /// [`Self::solve`] so positions stay aligned with values.
     pub fn interaction_energy(
         &self,
         charge_positions: &[[f64; 3]],
         charge_values: &[f64],
-        _i: usize,
         j: usize,
     ) -> Result<f64> {
         if charge_positions.len() != charge_values.len() {
