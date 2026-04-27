@@ -74,9 +74,12 @@ fn faces_from_numpy(arr: &PyReadonlyArray2<'_, u32>) -> PyResult<Vec<[u32; 3]>> 
 fn positions_to_numpy<'py>(py: Python<'py>, positions: &[[f64; 3]]) -> Bound<'py, PyArray2<f64>> {
     let n = positions.len();
     let flat: Vec<f64> = positions.iter().flat_map(|p| p.iter().copied()).collect();
-    PyArray1::from_vec(py, flat)
-        .reshape([n, 3])
-        .expect("shape is (N, 3)")
+    let result = PyArray1::from_vec(py, flat).reshape([n, 3]);
+    debug_assert!(result.is_ok(), "reshape n*3 → (n, 3) cannot fail");
+    // SAFETY: `flat` was built with exactly `n * 3` elements above,
+    // so `reshape([n, 3])` is a pure stride change with no element
+    // count mismatch — the only failure mode of `PyArray::reshape`.
+    unsafe { result.unwrap_unchecked() }
 }
 
 // =========================================================================
