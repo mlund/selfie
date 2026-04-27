@@ -8,9 +8,9 @@
 
 mod common;
 
-use common::{A, EPS_IN, EPS_OUT, eval_point, source};
 use bemtzmann::analytical::kirkwood_salt::reaction_field_potential_unit_source as phi_rf_analytical;
 use bemtzmann::{BemSolution, ChargeSide, Dielectric, Surface};
+use common::{A, EPS_IN, EPS_OUT, eval_point, source};
 
 const KAPPA: f64 = 1.0 / 9.0;
 

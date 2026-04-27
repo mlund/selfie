@@ -19,6 +19,11 @@ use indicatif_log_bridge::LogWrapper;
 use log::LevelFilter;
 
 const KCAL_PER_KJ: f64 = 1.0 / 4.184;
+// why: PQR charges are typically given to 3–4 decimals; anything
+// smaller is rounding noise. Skipping these atoms saves O(N_panels)
+// per-site work in both the GMRES RHS and the per-atom field
+// evaluation without measurably perturbing E_solv.
+const NEAR_ZERO_CHARGE: f64 = 1e-6;
 
 /// BEMtzmann — boundary-element Poisson–Boltzmann CLI. Reads a structure
 /// file, builds a Gaussian molecular surface, optionally writes the
@@ -164,6 +169,15 @@ fn run(cli: &Cli, multi: &MultiProgress) -> Result<(), Error> {
         cli.structure.display()
     );
 
+    let (charge_positions, charge_values) = filter_charged(&atoms);
+    let dropped = atoms.charges.len() - charge_values.len();
+    if dropped > 0 {
+        log::info!(
+            "Skipping {dropped} atoms with |q| < {NEAR_ZERO_CHARGE:.0e} for the solve ({} kept)",
+            charge_values.len()
+        );
+    }
+
     let surface = {
         let pb = spinner(
             multi,
@@ -197,7 +211,7 @@ fn run(cli: &Cli, multi: &MultiProgress) -> Result<(), Error> {
     // implicitly turns the solver on regardless of `--solve`.
     let needs_solve = cli.solve || cli.potential_dx.is_some();
     if needs_solve {
-        let side = resolve_side(&surface, &atoms.positions, cli.side)?;
+        let side = resolve_side(&surface, &charge_positions, cli.side)?;
         let media = Dielectric::continuum_with_salt(cli.eps_in, cli.eps_out, cli.kappa);
         log::info!(
             "Solving BEM system (ε_in = {:.2}, ε_out = {:.2}, κ = {:.3} Å⁻¹, {} panels)...",
@@ -210,14 +224,14 @@ fn run(cli: &Cli, multi: &MultiProgress) -> Result<(), Error> {
             let pb = spinner(multi, "Running GMRES...".to_string());
             let t0 = Instant::now();
             let solution =
-                BemSolution::solve(&surface, media, side, &atoms.positions, &atoms.charges)?;
+                BemSolution::solve(&surface, media, side, &charge_positions, &charge_values)?;
             pb.finish_and_clear();
             log::debug!("Solver finished in {:.2?}", t0.elapsed());
             solution
         };
 
         if cli.solve {
-            let e_reduced = solvation_energy_from(&solution, &atoms)?;
+            let e_reduced = solvation_energy_from(&solution, &charge_positions, &charge_values)?;
             let e_kj = to_kJ_per_mol(e_reduced);
             let e_kcal = e_kj * KCAL_PER_KJ;
             log::info!(
@@ -249,12 +263,12 @@ fn run(cli: &Cli, multi: &MultiProgress) -> Result<(), Error> {
 }
 
 fn load_atoms(path: &Path, override_format: Option<InputFormat>) -> Result<Atoms, Error> {
-    let format = override_format.or_else(|| detect_format(path)).ok_or_else(|| {
-        Error::Io {
+    let format = override_format
+        .or_else(|| detect_format(path))
+        .ok_or_else(|| Error::Io {
             path: path.display().to_string(),
             reason: "could not infer format from extension; pass `--format pqr|xyz`".into(),
-        }
-    })?;
+        })?;
     match format {
         InputFormat::Pqr => read_pqr(path),
         InputFormat::Xyz => read_xyz(path),
@@ -291,14 +305,33 @@ const fn side_label(side: ChargeSide) -> &'static str {
     }
 }
 
+/// Split [`Atoms`] into the charged-site subset used by the solver.
+/// Backbone / counterion atoms with `|q| < NEAR_ZERO_CHARGE` contribute
+/// nothing meaningful to the RHS or to E_solv, so we skip the per-site
+/// work for them. Radii are kept on the full [`Atoms`] for the mesher,
+/// which still needs every atom to build the molecular surface.
+fn filter_charged(atoms: &Atoms) -> (Vec<[f64; 3]>, Vec<f64>) {
+    atoms
+        .positions
+        .iter()
+        .copied()
+        .zip(atoms.charges.iter().copied())
+        .filter(|(_, q)| q.abs() >= NEAR_ZERO_CHARGE)
+        .unzip()
+}
+
 /// Total solvation energy E_solv = ½ Σ qⱼ φ_rf(rⱼ) from an already-built
 /// solution. Uses the batched `reaction_field_at_many` so the per-atom
 /// field evaluations share rayon parallelism — O(N_panels) total instead
 /// of O(N_atoms × N_panels) from looping `interaction_energy`.
-fn solvation_energy_from(solution: &BemSolution<'_>, atoms: &Atoms) -> Result<f64, Error> {
-    let mut phi_rf = vec![0.0_f64; atoms.charges.len()];
-    solution.reaction_field_at_many(&atoms.positions, &mut phi_rf)?;
-    let dot: f64 = atoms.charges.iter().zip(&phi_rf).map(|(&q, &p)| q * p).sum();
+fn solvation_energy_from(
+    solution: &BemSolution<'_>,
+    positions: &[[f64; 3]],
+    charges: &[f64],
+) -> Result<f64, Error> {
+    let mut phi_rf = vec![0.0_f64; charges.len()];
+    solution.reaction_field_at_many(positions, &mut phi_rf)?;
+    let dot: f64 = charges.iter().zip(&phi_rf).map(|(&q, &p)| q * p).sum();
     Ok(0.5 * dot)
 }
 
@@ -355,8 +388,11 @@ fn sample_and_write_dx(
 
     let file = std::fs::File::create(path).map_err(io_err)?;
     let mut w = std::io::BufWriter::new(file);
-    writeln!(w, "# OpenDX scalar field — reaction-field potential φ_rf (reduced units, e/Å)")
-        .map_err(io_err)?;
+    writeln!(
+        w,
+        "# OpenDX scalar field — reaction-field potential φ_rf (reduced units, e/Å)"
+    )
+    .map_err(io_err)?;
     writeln!(w, "# Generated by BEMtzmann").map_err(io_err)?;
     writeln!(w, "object 1 class gridpositions counts {nx} {ny} {nz}").map_err(io_err)?;
     writeln!(w, "origin {} {} {}", origin[0], origin[1], origin[2]).map_err(io_err)?;
@@ -364,8 +400,11 @@ fn sample_and_write_dx(
     writeln!(w, "delta 0 {} 0", spacing[1]).map_err(io_err)?;
     writeln!(w, "delta 0 0 {}", spacing[2]).map_err(io_err)?;
     writeln!(w, "object 2 class gridconnections counts {nx} {ny} {nz}").map_err(io_err)?;
-    writeln!(w, "object 3 class array type double rank 0 items {n_total} data follows")
-        .map_err(io_err)?;
+    writeln!(
+        w,
+        "object 3 class array type double rank 0 items {n_total} data follows"
+    )
+    .map_err(io_err)?;
     for chunk in values.chunks(3) {
         for (i, v) in chunk.iter().enumerate() {
             if i > 0 {
@@ -376,8 +415,11 @@ fn sample_and_write_dx(
         writeln!(w).map_err(io_err)?;
     }
     writeln!(w, "attribute \"dep\" string \"positions\"").map_err(io_err)?;
-    writeln!(w, "object \"regular positions regular connections\" class field")
-        .map_err(io_err)?;
+    writeln!(
+        w,
+        "object \"regular positions regular connections\" class field"
+    )
+    .map_err(io_err)?;
     writeln!(w, "component \"positions\" value 1").map_err(io_err)?;
     writeln!(w, "component \"connections\" value 2").map_err(io_err)?;
     writeln!(w, "component \"data\" value 3").map_err(io_err)?;

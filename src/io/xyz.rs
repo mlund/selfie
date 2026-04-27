@@ -153,10 +153,7 @@ mod tests {
 
     #[test]
     fn populates_radii_when_all_rows_have_them() {
-        let path = write_tmp(
-            "f.xyz",
-            "C 0.0 0.0 0.0 -0.2 1.7\nH 0.5 0.5 0.5 +0.1 1.2\n",
-        );
+        let path = write_tmp("f.xyz", "C 0.0 0.0 0.0 -0.2 1.7\nH 0.5 0.5 0.5 +0.1 1.2\n");
         let a = read_xyz(&path).unwrap();
         assert_eq!(a.radii, vec![1.7, 1.2]);
     }
