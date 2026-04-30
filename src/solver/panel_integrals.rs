@@ -195,6 +195,10 @@ fn accumulate_kernel<const N: usize>(
 ) -> (f64, f64) {
     let mut acc_k = 0.0;
     let mut acc_kp = 0.0;
+    // why: the κ == 0 branch is a perf specialisation (skips the
+    // `exp_neg` call and the `κr + 1` factor in the salt-free Laplace
+    // case), not a correctness distinction — both branches compute the
+    // same physics, the second just specialises to G_0 when κ = 0.
     if kappa == 0.0 {
         for i in 0..N {
             let dx = observer.x - points.xs[i];

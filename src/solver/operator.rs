@@ -23,6 +23,12 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+// why: per-iteration GMRES wall-clock telemetry, only ever read inside
+// `apply` when `RUST_LOG=bemtzmann=debug` is set. Process-global rather
+// than per-`BemOperator` so the count and first-apply timestamp survive
+// across solves driven by a shared `SolveContext` (e.g. from
+// `LinearResponse::precompute`'s N basis solves) and produce one
+// continuous timing trace.
 static APPLY_COUNT: AtomicUsize = AtomicUsize::new(0);
 static FIRST_APPLY: OnceLock<Instant> = OnceLock::new();
 

@@ -130,14 +130,48 @@ impl<'s> BemSolution<'s> {
     /// callers that can't statically guarantee the side should inspect
     /// their mesh.
     pub fn reaction_field_at(&self, point: [f64; 3]) -> f64 {
-        reaction_field_at_impl(
-            self.surface,
-            &self.f,
-            &self.h,
-            DVec3::from(point),
-            self.side,
-            self.media,
-        )
+        // why: the sign in Green's 3rd identity flips between interior
+        // and exterior because Ω⁺'s outward normal is −n while Ω⁻'s is
+        // +n. The interior formula also carries the ε_out/ε_in factor
+        // that links h = ∂φ_out/∂n to ∂φ_in/∂n through the dielectric
+        // BC. Interior is always Laplace (κ applies only to the
+        // exterior solvent), so interior evaluations use G_0 regardless
+        // of `media.kappa`.
+        const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
+        let r = DVec3::from(point);
+        let geom = self.surface.geom_internal();
+        let (kappa_eval, f_sign, h_coeff) = match self.side {
+            ChargeSide::Interior => (0.0, -1.0, self.media.eps_out / self.media.eps_in),
+            ChargeSide::Exterior => (self.media.kappa, 1.0, -1.0),
+        };
+        let panels = self
+            .f
+            .iter()
+            .zip(&self.h)
+            .zip(&geom.normals)
+            .zip(&geom.areas)
+            .zip(&geom.tris);
+        let mut sum = 0.0;
+        for ((((&f_b, &h_b), &nb), &ab), &tri) in panels {
+            let points: panel_integrals::GaussPoints<3> = tri.into();
+            let mut quad = 0.0;
+            for i in 0..3 {
+                let dx = r.x - points.xs[i];
+                let dy = r.y - points.ys[i];
+                let dz = r.z - points.zs[i];
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                let inv_r = 1.0 / dist;
+                let exp_kr = (-kappa_eval * dist).exp();
+                let g = exp_kr * inv_r / FOUR_PI;
+                let d_dot_nb = dx * nb.x + dy * nb.y + dz * nb.z;
+                let dg_dn_source =
+                    kappa_eval.mul_add(dist, 1.0) * exp_kr * d_dot_nb * inv_r * inv_r * inv_r
+                        / FOUR_PI;
+                quad += points.ws[i] * (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
+            }
+            sum += quad * ab;
+        }
+        sum
     }
 
     /// Batched reaction-field evaluation at many external points.
@@ -258,9 +292,10 @@ impl<'s> BemSolution<'s> {
     /// already-built solution.
     ///
     /// Note: `φ_rf` was computed once for *all* source charges, so the
-    /// returned value already includes the cross-terms with every other
-    /// charge — it is the contribution of site `j` to `2 · E_solv`, not
-    /// the pairwise W_ij. The caller passes the same arrays used in
+    /// returned value is the `j`-th term of `q · G q` — i.e. summing
+    /// over `j` and multiplying by ½ recovers `E_solv`. It is *not*
+    /// the pairwise `W_ij`; the BIE solve already mixed every source
+    /// into `φ_rf`. The caller passes the same arrays used in
     /// [`Self::solve`] so positions stay aligned with values.
     pub fn interaction_energy(
         &self,
@@ -291,54 +326,6 @@ impl<'s> BemSolution<'s> {
     pub const fn dielectric(&self) -> Dielectric {
         self.media
     }
-}
-
-fn reaction_field_at_impl(
-    surface: &Surface,
-    f: &[f64],
-    h: &[f64],
-    r: DVec3,
-    side: ChargeSide,
-    media: Dielectric,
-) -> f64 {
-    // why: the sign in Green's 3rd identity flips between interior and
-    // exterior because Ω⁺'s outward normal is −n while Ω⁻'s is +n. The
-    // interior formula also carries the ε_out/ε_in factor that links
-    // h = ∂φ_out/∂n to ∂φ_in/∂n through the dielectric BC. Interior is
-    // always Laplace (κ applies only to the exterior solvent), so
-    // interior evaluations use G_0 regardless of `media.kappa`.
-    const FOUR_PI: f64 = 4.0 * core::f64::consts::PI;
-    let geom = surface.geom_internal();
-    let (kappa_eval, f_sign, h_coeff) = match side {
-        ChargeSide::Interior => (0.0, -1.0, media.eps_out / media.eps_in),
-        ChargeSide::Exterior => (media.kappa, 1.0, -1.0),
-    };
-    let panels = f
-        .iter()
-        .zip(h)
-        .zip(&geom.normals)
-        .zip(&geom.areas)
-        .zip(&geom.tris);
-    let mut sum = 0.0;
-    for ((((&f_b, &h_b), &nb), &ab), &tri) in panels {
-        let points: panel_integrals::GaussPoints<3> = tri.into();
-        let mut quad = 0.0;
-        for i in 0..3 {
-            let dx = r.x - points.xs[i];
-            let dy = r.y - points.ys[i];
-            let dz = r.z - points.zs[i];
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            let inv_r = 1.0 / dist;
-            let exp_kr = (-kappa_eval * dist).exp();
-            let g = exp_kr * inv_r / FOUR_PI;
-            let d_dot_nb = dx * nb.x + dy * nb.y + dz * nb.z;
-            let dg_dn_source =
-                kappa_eval.mul_add(dist, 1.0) * exp_kr * d_dot_nb * inv_r * inv_r * inv_r / FOUR_PI;
-            quad += points.ws[i] * (f_sign * f_b).mul_add(dg_dn_source, h_coeff * g * h_b);
-        }
-        sum += quad * ab;
-    }
-    sum
 }
 
 #[cfg(test)]

@@ -429,9 +429,13 @@ pub struct PyLinearResponse {
 impl PyLinearResponse {
     fn as_bem_solutions(&self) -> Vec<BemSolution<'_>> {
         // why: LinearResponse's public evaluators take `&self`, and
-        // `LinearResponse` itself holds `Vec<BemSolution<'_>>`. We
-        // reconstruct those on demand from the per-site densities
-        // since the Python wrapper can't carry the Rust lifetime.
+        // `LinearResponse` itself holds `Vec<BemSolution<'_>>`. The
+        // Python wrapper can't carry `&'s Surface` across the FFI
+        // boundary, so the BemSolutions are re-materialised on demand
+        // from the cached per-site densities. `BemSolution::from_
+        // densities` takes its `f`/`h` Vecs by value (it's a `const
+        // fn` constructor), so each call clones — this is the price
+        // of lifetime erasure across pyo3, not negligence.
         self.densities
             .iter()
             .map(|(f, h)| {

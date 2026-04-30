@@ -17,6 +17,12 @@ use std::path::Path;
 
 /// Axis-aligned bounding box of a point cloud as `(lo, hi)` per axis.
 /// Empty input gives `lo = +∞`, `hi = -∞`; callers should guard.
+///
+/// why: only used by `python.rs::write_potential_dx`'s auto-grid
+/// derivation, so gated to that feature. The CLI binary
+/// (`src/main.rs::derive_potential_grid`) inlines the same loop —
+/// cross-`[[bin]]` dedup would force a public API expansion to share
+/// this 6-line helper, which isn't worth it.
 #[cfg(feature = "python")]
 pub(crate) fn bbox(points: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
     let mut lo = [f64::INFINITY; 3];
@@ -315,6 +321,18 @@ impl Surface {
     }
 }
 
+/// Three-state classification used in two related senses in this file:
+///
+/// 1. As a per-triangle ray-cast result inside [`ray_triangle_intersect`]:
+///    `Interior` = ray crossed forward (`t > 0`), `Exterior` = miss or
+///    backward, `OnSurface` = ray origin lies on the triangle plane.
+/// 2. As the final point-in-mesh classification returned by
+///    [`Surface::contains_point`]: `Interior` / `Exterior` of the closed
+///    boundary, `OnSurface` for points within `eps` of any face.
+///
+/// The parity-of-crossings logic in `contains_point` happens to map
+/// cleanly between the two senses (one variant reused per role), which
+/// is why the same enum is used; the meaning is contextual.
 enum PointLocation {
     Interior,
     Exterior,
@@ -325,13 +343,10 @@ enum PointLocation {
 /// module-level `const` so the loop doesn't re-materialise it per face.
 const RAY_DIR: DVec3 = DVec3::new(1.0, 1.234e-5, -2.718e-5);
 
-/// Möller-Trumbore ray-triangle intersection.
-///
-/// Reused from `contains_point`: the three-way return (`Interior` for a
-/// forward crossing, `Exterior` for miss / backwards, `OnSurface` when
-/// the ray origin lies on the triangle plane within `eps`) keeps the
-/// parity counter clean and lets a grazing point short-circuit the whole
-/// mesh loop.
+/// Möller-Trumbore ray-triangle intersection. See [`PointLocation`] for
+/// the meaning of the three returned variants in this context — note the
+/// `Interior` / `Exterior` here are *ray-cast* outcomes, not point-in-
+/// mesh classifications.
 fn ray_triangle_intersect(origin: DVec3, dir: DVec3, face: [DVec3; 3], eps: f64) -> PointLocation {
     let e1 = face[1] - face[0];
     let e2 = face[2] - face[0];
